@@ -1,0 +1,23 @@
+groups:
+  - name: photomatch-backend
+    rules:
+      - alert: PhotomatchApiHighErrorRate
+        expr: sum(rate(http_requests_total{app="photomatch-api",status=~"5.."}[5m])) / sum(rate(http_requests_total{app="photomatch-api"}[5m])) > 0.05
+        for: 10m
+        labels: { severity: page }
+        annotations: { summary: "Photomatch API 5xx rate is above 5%" }
+      - alert: PhotomatchApiHighLatency
+        expr: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{app="photomatch-api"}[5m]))) > 0.5
+        for: 15m
+        labels: { severity: ticket }
+        annotations: { summary: "Photomatch API P95 latency is above 500 ms" }
+      - alert: PhotomatchOutboxFailures
+        expr: photomatch_outbox_failed_total > 0
+        for: 5m
+        labels: { severity: page }
+        annotations: { summary: "Photomatch has terminal outbox delivery failures" }
+      - alert: PhotomatchWorkerMissing
+        expr: time() - photomatch_worker_heartbeat_timestamp_seconds > 90
+        for: 2m
+        labels: { severity: page }
+        annotations: { summary: "No healthy Photomatch worker heartbeat" }

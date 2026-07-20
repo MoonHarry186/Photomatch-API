@@ -1,0 +1,9 @@
+.env
+.git
+.github
+coverage
+dist
+node_modules
+openapi.json
+test
+*.log

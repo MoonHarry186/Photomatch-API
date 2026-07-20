@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: photomatch-backend-config
+data:
+  NODE_ENV: production
+  PORT: "3000"
+  EMAIL_ADAPTER: smtp
+  OAUTH_ADAPTER: production
+  PUSH_ADAPTER: production
+  R2_REGION: auto
+  R2_FORCE_PATH_STYLE: "false"
+  LOCATION_NOISE_MIN_METERS: "1000"
+  LOCATION_NOISE_MAX_METERS: "3000"
+  LOCATION_DEFAULT_RADIUS_KM: "20"
+  LOCATION_MAX_RADIUS_KM: "100"
+  LOCATION_DEFAULT_VISIBILITY_HOURS: "24"

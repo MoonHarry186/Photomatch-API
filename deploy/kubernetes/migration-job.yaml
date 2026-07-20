@@ -1,0 +1,19 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: photomatch-migrate-${RUN_ID}
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: ${IMAGE}
+          command: ["node", "scripts/deploy-migrations.js"]
+          envFrom:
+            - configMapRef:
+                name: photomatch-backend-config
+            - secretRef:
+                name: photomatch-backend-secrets

@@ -1,0 +1,93 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: photomatch-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: photomatch-api
+  template:
+    metadata:
+      labels:
+        app: photomatch-api
+    spec:
+      containers:
+        - name: api
+          image: ${IMAGE}
+          command: ["node", "dist/main.js"]
+          ports:
+            - name: http
+              containerPort: 3000
+          envFrom:
+            - configMapRef:
+                name: photomatch-backend-config
+            - secretRef:
+                name: photomatch-backend-secrets
+          readinessProbe:
+            httpGet:
+              path: /api/v1/health/ready
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health/live
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: photomatch-worker
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: photomatch-worker
+  template:
+    metadata:
+      labels:
+        app: photomatch-worker
+    spec:
+      containers:
+        - name: worker
+          image: ${IMAGE}
+          command: ["node", "dist/worker.js"]
+          envFrom:
+            - configMapRef:
+                name: photomatch-backend-config
+            - secretRef:
+                name: photomatch-backend-secrets
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "kill -0 1"]
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 768Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: photomatch-api
+spec:
+  selector:
+    app: photomatch-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

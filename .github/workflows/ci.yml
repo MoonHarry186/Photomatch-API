@@ -1,0 +1,87 @@
+name: Backend CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgis/postgis:15-3.4
+        env:
+          POSTGRES_DB: photomatch_test
+          POSTGRES_USER: photomatch
+          POSTGRES_PASSWORD: photomatch
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U photomatch -d photomatch_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://photomatch:photomatch@127.0.0.1:5432/photomatch_test
+      TEST_DATABASE_URL: postgresql://photomatch:photomatch@127.0.0.1:5432/photomatch_test
+      REDIS_URL: redis://127.0.0.1:6379
+      JWT_ACCESS_SECRET: ci-access-secret-with-at-least-32-characters
+      JWT_REFRESH_SECRET: ci-refresh-secret-with-at-least-32-characters
+      EMAIL_ADAPTER: fake
+      EMAIL_FROM: ci@photomatch.local
+      OAUTH_ADAPTER: fake
+      GOOGLE_CLIENT_IDS: ci-google
+      APPLE_CLIENT_IDS: ci-apple
+      R2_ENDPOINT: http://127.0.0.1:9000
+      R2_REGION: auto
+      R2_BUCKET: ci-photomatch
+      R2_ACCESS_KEY_ID: ci-access
+      R2_SECRET_ACCESS_KEY: ci-secret
+      R2_FORCE_PATH_STYLE: true
+      PUSH_ADAPTER: fake
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.13.0
+          cache: npm
+          cache-dependency-path: photomatch-api/package-lock.json
+      - run: npm ci
+        working-directory: photomatch-api
+      - run: npm run prisma:generate
+        working-directory: photomatch-api
+      - run: npm run prisma:migrate:deploy
+        working-directory: photomatch-api
+      - run: npm run seed
+        working-directory: photomatch-api
+      - run: npm run format:check
+        working-directory: photomatch-api
+      - run: npm run lint
+        working-directory: photomatch-api
+      - run: npm run typecheck
+        working-directory: photomatch-api
+      - run: npm run test:unit
+        working-directory: photomatch-api
+      - run: npm run test:integration
+        working-directory: photomatch-api
+      - run: npm run test:e2e
+        working-directory: photomatch-api
+      - run: npm run build
+        working-directory: photomatch-api
+      - run: npm run openapi:export
+        working-directory: photomatch-api
+      - run: npm run test:contract
+        working-directory: photomatch-api
+      - run: git diff --exit-code -- openapi.json
+        working-directory: photomatch-api
