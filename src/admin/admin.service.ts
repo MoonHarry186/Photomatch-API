@@ -1,20 +1,30 @@
 import { Injectable } from '@nestjs/common';
 import {
   AccountStatus,
+  BookingStatus,
   CatalogStatus,
+  MatchStatus,
   PenaltyStatus,
   ReportStatus,
   ReviewStatus,
   RoleCode,
+  Prisma,
 } from '@prisma/client';
 import { ApiError } from '../common/api-error';
 import { decodeCursor, encodeCursor } from '../common/pagination';
 import { PrismaService } from '../database/prisma.service';
-import { CreatePenaltyDto, ResolveReportDto } from '../trust/trust.dto';
+import { AdminReportStatusDto, CreatePenaltyDto, ResolveReportDto } from '../trust/trust.dto';
 import { TrustService } from '../trust/trust.service';
 import {
+  AdminActivityFieldQueryDto,
   AdminBookingQueryDto,
-  AdminListQueryDto,
+  AdminLegalDocumentQueryDto,
+  AdminPenaltyQueryDto,
+  AdminPhotographerQueryDto,
+  AdminReportQueryDto,
+  AdminReviewQueryDto,
+  AdminServiceQueryDto,
+  AdminUserQueryDto,
   CreateActivityFieldDto,
   CreateLegalDocumentDto,
   CreateServiceDto,
@@ -33,27 +43,56 @@ export class AdminService {
   ) {}
 
   async dashboard() {
-    const [users, photographers, matches, bookings, openReports, activePenalties] =
-      await Promise.all([
-        this.prisma.user.count({ where: { deletedAt: null } }),
-        this.prisma.userRole.count({ where: { role: { code: RoleCode.PHOTOGRAPHER } } }),
-        this.prisma.match.count(),
-        this.prisma.booking.count(),
-        this.prisma.userReport.count({
-          where: { status: { in: [ReportStatus.OPEN, ReportStatus.IN_REVIEW] } },
-        }),
-        this.prisma.accountPenalty.count({ where: { status: PenaltyStatus.ACTIVE } }),
-      ]);
-    return { users, photographers, matches, bookings, openReports, activePenalties };
+    const [
+      activeUsers,
+      photographers,
+      activeMatches,
+      pendingBookings,
+      openReports,
+      activePenalties,
+    ] = await Promise.all([
+      this.prisma.user.count({
+        where: { deletedAt: null, accountStatus: AccountStatus.ACTIVE },
+      }),
+      this.prisma.userRole.count({
+        where: {
+          status: 'ACTIVE',
+          role: { code: RoleCode.PHOTOGRAPHER },
+          user: { deletedAt: null, accountStatus: AccountStatus.ACTIVE },
+        },
+      }),
+      this.prisma.match.count({ where: { status: MatchStatus.ACTIVE } }),
+      this.prisma.booking.count({ where: { status: BookingStatus.PENDING } }),
+      this.prisma.userReport.count({
+        where: { status: { in: [ReportStatus.OPEN, ReportStatus.IN_REVIEW] } },
+      }),
+      this.prisma.accountPenalty.count({ where: { status: PenaltyStatus.ACTIVE } }),
+    ]);
+    return {
+      activeUsers,
+      photographers,
+      activeMatches,
+      pendingBookings,
+      openReports,
+      activePenalties,
+      // Backward-compatible aliases for the original MVP summary contract.
+      users: activeUsers,
+      matches: activeMatches,
+      bookings: pendingBookings,
+    };
   }
 
-  async users(query: AdminListQueryDto) {
+  async users(query: AdminUserQueryDto) {
     const cursor = decodeCursor<{ createdAt: string; id: string }>(query.cursor);
-    const accountStatus = this.enumValue(AccountStatus, query.status);
     const items = await this.prisma.user.findMany({
       where: {
         deletedAt: null,
-        ...(accountStatus ? { accountStatus } : {}),
+        ...(query.status ? { accountStatus: query.status } : {}),
+        ...(query.verificationStatus
+          ? { identityVerificationStatus: query.verificationStatus }
+          : {}),
+        ...(query.cityId ? { profile: { cityId: query.cityId } } : {}),
+        ...(query.role ? { roles: { some: { role: { code: query.role } } } } : {}),
         ...(query.search
           ? {
               OR: [
@@ -78,8 +117,18 @@ export class AdminService {
         accountStatus: true,
         identityVerificationStatus: true,
         emailVerified: true,
+        lastLoginAt: true,
         createdAt: true,
-        profile: { select: { displayName: true, avatarAssetId: true, city: true, status: true } },
+        updatedAt: true,
+        profile: {
+          select: {
+            displayName: true,
+            avatarAssetId: true,
+            cityId: true,
+            city: { select: { id: true, code: true, name: true } },
+            status: true,
+          },
+        },
         roles: { select: { id: true, status: true, role: { select: { code: true } } } },
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -103,7 +152,7 @@ export class AdminService {
         lastLoginAt: true,
         createdAt: true,
         updatedAt: true,
-        profile: true,
+        profile: { include: { city: true } },
         settings: true,
         roles: {
           select: {
@@ -112,6 +161,14 @@ export class AdminService {
             role: { select: { code: true, name: true } },
             photographerProfile: true,
             selectedServices: { include: { service: true } },
+            locationsPresence: {
+              select: {
+                isVisible: true,
+                visibleUntil: true,
+                publicRadiusMeters: true,
+                updatedAt: true,
+              },
+            },
           },
         },
         penaltiesReceived: {
@@ -180,14 +237,43 @@ export class AdminService {
     });
   }
 
-  async photographers(query: AdminListQueryDto) {
+  async photographers(query: AdminPhotographerQueryDto) {
     const cursor = decodeCursor<{ createdAt: string; id: string }>(query.cursor);
     const items = await this.prisma.userRole.findMany({
       where: {
         role: { code: RoleCode.PHOTOGRAPHER },
-        ...(query.search
-          ? { user: { profile: { displayName: { contains: query.search, mode: 'insensitive' } } } }
+        ...(query.status ? { status: query.status } : {}),
+        ...(query.availabilityStatus
+          ? { photographerProfile: { availabilityStatus: query.availabilityStatus } }
           : {}),
+        ...(query.activityFieldId
+          ? { selectedFields: { some: { activityFieldId: query.activityFieldId } } }
+          : {}),
+        ...(query.serviceId
+          ? {
+              selectedServices: {
+                some: { serviceId: query.serviceId, isActive: true },
+              },
+            }
+          : {}),
+        user: {
+          deletedAt: null,
+          ...(query.accountStatus ? { accountStatus: query.accountStatus } : {}),
+          ...(query.verificationStatus
+            ? { identityVerificationStatus: query.verificationStatus }
+            : {}),
+          ...(query.profileStatus || query.cityId || query.search
+            ? {
+                profile: {
+                  ...(query.profileStatus ? { status: query.profileStatus } : {}),
+                  ...(query.cityId ? { cityId: query.cityId } : {}),
+                  ...(query.search
+                    ? { displayName: { contains: query.search, mode: 'insensitive' as const } }
+                    : {}),
+                },
+              }
+            : {}),
+        },
         ...(cursor
           ? {
               OR: [
@@ -208,10 +294,17 @@ export class AdminService {
             accountStatus: true,
             identityVerificationStatus: true,
             profile: {
-              select: { displayName: true, avatarAssetId: true, city: true, status: true },
+              select: {
+                displayName: true,
+                avatarAssetId: true,
+                cityId: true,
+                city: { select: { id: true, code: true, name: true } },
+                status: true,
+              },
             },
           },
         },
+        selectedFields: { include: { activityField: true } },
         selectedServices: { where: { isActive: true }, include: { service: true } },
         _count: { select: { portfolioItems: true, photographerBookings: true } },
       },
@@ -235,11 +328,25 @@ export class AdminService {
             email: true,
             accountStatus: true,
             identityVerificationStatus: true,
-            profile: true,
+            profile: { include: { city: true } },
+            penaltiesReceived: {
+              select: {
+                id: true,
+                penaltyType: true,
+                featureCode: true,
+                reason: true,
+                status: true,
+                startsAt: true,
+                endsAt: true,
+              },
+              orderBy: { createdAt: 'desc' },
+              take: 20,
+            },
+            _count: { select: { reportsReceived: true, reviewsReceived: true } },
           },
         },
         selectedFields: { include: { activityField: true } },
-        selectedServices: { include: { service: true } },
+        selectedServices: { include: { service: { include: { activityField: true } } } },
         portfolioItems: {
           where: { deletedAt: null },
           select: {
@@ -250,21 +357,46 @@ export class AdminService {
             description: true,
             sortOrder: true,
             createdAt: true,
+            asset: {
+              select: { id: true, mimeType: true, status: true, isPublic: true, updatedAt: true },
+            },
           },
           orderBy: { sortOrder: 'asc' },
         },
+        _count: { select: { portfolioItems: true, photographerBookings: true } },
       },
     });
     if (!item) throw ApiError.notFound('Photographer');
     return item;
   }
 
-  async reviews(query: AdminListQueryDto) {
+  async reviews(query: AdminReviewQueryDto) {
     const cursor = decodeCursor<{ createdAt: string; id: string }>(query.cursor);
-    const status = this.enumValue(ReviewStatus, query.status);
+    const createdAt = this.dateRange(query.dateFrom, query.dateTo);
     const items = await this.prisma.review.findMany({
       where: {
-        ...(status ? { status } : {}),
+        ...(query.status ? { status: query.status } : {}),
+        ...(query.rating ? { rating: query.rating } : {}),
+        ...(createdAt ? { createdAt } : {}),
+        ...(query.reviewerUserId ? { reviewerUserId: query.reviewerUserId } : {}),
+        ...(query.revieweeUserId ? { revieweeUserId: query.revieweeUserId } : {}),
+        ...(query.search
+          ? {
+              OR: [
+                { comment: { contains: query.search, mode: 'insensitive' } },
+                {
+                  reviewer: {
+                    profile: { displayName: { contains: query.search, mode: 'insensitive' } },
+                  },
+                },
+                {
+                  reviewee: {
+                    profile: { displayName: { contains: query.search, mode: 'insensitive' } },
+                  },
+                },
+              ],
+            }
+          : {}),
         ...(cursor
           ? {
               OR: [
@@ -277,6 +409,7 @@ export class AdminService {
       include: {
         reviewer: { select: { id: true, profile: true } },
         reviewee: { select: { id: true, profile: true } },
+        moderatedBy: { select: { id: true, email: true, profile: true } },
         booking: { select: { id: true, status: true, serviceId: true, completedAt: true } },
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -291,7 +424,8 @@ export class AdminService {
       include: {
         reviewer: { select: { id: true, profile: true } },
         reviewee: { select: { id: true, profile: true } },
-        booking: true,
+        moderatedBy: { select: { id: true, email: true, profile: true } },
+        booking: { include: { service: true } },
       },
     });
     if (!review) throw ApiError.notFound('Review');
@@ -314,12 +448,34 @@ export class AdminService {
     });
   }
 
-  async reports(query: AdminListQueryDto) {
+  async reports(query: AdminReportQueryDto) {
     const cursor = decodeCursor<{ createdAt: string; id: string }>(query.cursor);
-    const status = this.enumValue(ReportStatus, query.status);
+    const createdAt = this.dateRange(query.dateFrom, query.dateTo);
     const items = await this.prisma.userReport.findMany({
       where: {
-        ...(status ? { status } : {}),
+        ...(query.status ? { status: query.status } : {}),
+        ...(query.reasonCode ? { reasonCode: query.reasonCode } : {}),
+        ...(query.reporterUserId ? { reporterUserId: query.reporterUserId } : {}),
+        ...(query.reportedUserId ? { reportedUserId: query.reportedUserId } : {}),
+        ...(createdAt ? { createdAt } : {}),
+        ...this.reportContextWhere(query.contextType),
+        ...(query.search
+          ? {
+              OR: [
+                { description: { contains: query.search, mode: 'insensitive' } },
+                {
+                  reporter: {
+                    profile: { displayName: { contains: query.search, mode: 'insensitive' } },
+                  },
+                },
+                {
+                  reportedUser: {
+                    profile: { displayName: { contains: query.search, mode: 'insensitive' } },
+                  },
+                },
+              ],
+            }
+          : {}),
         ...(cursor
           ? {
               OR: [
@@ -336,7 +492,10 @@ export class AdminService {
         reasonCode: true,
         status: true,
         createdAt: true,
+        updatedAt: true,
         resolvedAt: true,
+        reporter: { select: { id: true, profile: { select: { displayName: true } } } },
+        reportedUser: { select: { id: true, profile: { select: { displayName: true } } } },
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: query.limit + 1,
@@ -350,26 +509,81 @@ export class AdminService {
       include: {
         reporter: { select: { id: true, profile: true } },
         reportedUser: { select: { id: true, profile: true } },
+        resolvedBy: { select: { id: true, email: true, profile: true } },
+        match: { select: { id: true, status: true, createdAt: true, endedAt: true } },
+        conversation: { select: { id: true, status: true, createdAt: true, lastMessageAt: true } },
+        message: {
+          select: { id: true, messageType: true, content: true, sentAt: true, senderUserId: true },
+        },
+        booking: {
+          select: {
+            id: true,
+            status: true,
+            serviceId: true,
+            scheduledStart: true,
+            scheduledEnd: true,
+            agreedPrice: true,
+            currency: true,
+          },
+        },
         evidence: {
-          select: { assetId: true, asset: { select: { mimeType: true, status: true } } },
+          select: {
+            assetId: true,
+            asset: {
+              select: { mimeType: true, status: true, sizeBytes: true, createdAt: true },
+            },
+          },
         },
         penalties: true,
       },
     });
     if (!report) throw ApiError.notFound('Report');
-    return report;
+    return {
+      ...report,
+      evidence: report.evidence.map((item) => ({
+        ...item,
+        asset: {
+          ...item.asset,
+          sizeBytes: item.asset.sizeBytes.toString(),
+        },
+      })),
+    };
   }
 
   resolveReport(adminUserId: string, reportId: string, dto: ResolveReportDto) {
     return this.trust.resolveReport(adminUserId, reportId, dto);
   }
 
-  async penalties(query: AdminListQueryDto) {
+  reportStatus(adminUserId: string, reportId: string, dto: AdminReportStatusDto) {
+    return this.trust.updateReportStatus(adminUserId, reportId, dto);
+  }
+
+  async penalties(query: AdminPenaltyQueryDto) {
     const cursor = decodeCursor<{ createdAt: string; id: string }>(query.cursor);
-    const status = this.enumValue(PenaltyStatus, query.status);
     const items = await this.prisma.accountPenalty.findMany({
       where: {
-        ...(status ? { status } : {}),
+        ...(query.status ? { status: query.status } : {}),
+        ...(query.penaltyType ? { penaltyType: query.penaltyType } : {}),
+        ...(query.userId ? { userId: query.userId } : {}),
+        ...(query.effectiveFrom
+          ? {
+              OR: [{ endsAt: null }, { endsAt: { gte: new Date(query.effectiveFrom) } }],
+            }
+          : {}),
+        ...(query.effectiveTo ? { startsAt: { lte: new Date(query.effectiveTo) } } : {}),
+        ...(query.search
+          ? {
+              OR: [
+                { reason: { contains: query.search, mode: 'insensitive' } },
+                { user: { email: { contains: query.search, mode: 'insensitive' } } },
+                {
+                  user: {
+                    profile: { displayName: { contains: query.search, mode: 'insensitive' } },
+                  },
+                },
+              ],
+            }
+          : {}),
         ...(cursor
           ? {
               OR: [
@@ -379,7 +593,12 @@ export class AdminService {
             }
           : {}),
       },
-      include: { user: { select: { id: true, email: true, profile: true } } },
+      include: {
+        user: { select: { id: true, email: true, profile: true } },
+        report: { select: { id: true, reasonCode: true, status: true } },
+        imposedBy: { select: { id: true, email: true, profile: true } },
+        revokedBy: { select: { id: true, email: true, profile: true } },
+      },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: query.limit + 1,
     });
@@ -392,6 +611,8 @@ export class AdminService {
       include: {
         user: { select: { id: true, email: true, profile: true } },
         report: { select: { id: true, reasonCode: true, status: true, resolution: true } },
+        imposedBy: { select: { id: true, email: true, profile: true } },
+        revokedBy: { select: { id: true, email: true, profile: true } },
       },
     });
     if (!penalty) throw ApiError.notFound('Penalty');
@@ -408,9 +629,17 @@ export class AdminService {
 
   async bookings(query: AdminBookingQueryDto) {
     const cursor = decodeCursor<{ createdAt: string; id: string }>(query.cursor);
+    const status = query.status ?? query.bookingStatus;
+    const scheduledStart = this.dateRange(query.dateFrom, query.dateTo);
     const items = await this.prisma.booking.findMany({
       where: {
-        ...(query.bookingStatus ? { status: query.bookingStatus } : {}),
+        ...(status ? { status } : {}),
+        ...(scheduledStart ? { scheduledStart } : {}),
+        ...(query.customerUserId ? { customerRole: { userId: query.customerUserId } } : {}),
+        ...(query.photographerUserId
+          ? { photographerRole: { userId: query.photographerUserId } }
+          : {}),
+        ...(query.serviceId ? { serviceId: query.serviceId } : {}),
         ...(query.search
           ? {
               OR: [
@@ -442,8 +671,12 @@ export class AdminService {
       },
       include: {
         service: true,
-        customerRole: { include: { user: { include: { profile: true } } } },
-        photographerRole: { include: { user: { include: { profile: true } } } },
+        customerRole: {
+          select: { id: true, user: { select: { id: true, email: true, profile: true } } },
+        },
+        photographerRole: {
+          select: { id: true, user: { select: { id: true, email: true, profile: true } } },
+        },
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take: query.limit + 1,
@@ -456,9 +689,17 @@ export class AdminService {
       where: { id: bookingId },
       include: {
         service: true,
-        customerRole: { include: { user: { include: { profile: true } } } },
-        photographerRole: { include: { user: { include: { profile: true } } } },
-        history: { orderBy: [{ changedAt: 'asc' }, { id: 'asc' }] },
+        customerRole: {
+          select: { id: true, user: { select: { id: true, email: true, profile: true } } },
+        },
+        photographerRole: {
+          select: { id: true, user: { select: { id: true, email: true, profile: true } } },
+        },
+        conversation: { select: { id: true, status: true, createdAt: true, lastMessageAt: true } },
+        history: {
+          include: { changedBy: { select: { id: true, email: true, profile: true } } },
+          orderBy: [{ changedAt: 'asc' }, { id: 'asc' }],
+        },
         reports: { select: { id: true, status: true, reasonCode: true, createdAt: true } },
       },
     });
@@ -466,18 +707,36 @@ export class AdminService {
     return booking;
   }
 
-  activityFields(query: AdminListQueryDto) {
-    return this.prisma.activityField.findMany({
-      where: query.status
-        ? { status: this.enumValue(CatalogStatus, query.status) ?? undefined }
-        : {},
+  async activityFields(query: AdminActivityFieldQueryDto) {
+    const cursor = decodeCursor<{ createdAt: string; id: string }>(query.cursor);
+    const items = await this.prisma.activityField.findMany({
+      where: {
+        ...(query.status ? { status: query.status } : {}),
+        ...(query.search
+          ? {
+              OR: [
+                { code: { contains: query.search, mode: 'insensitive' } },
+                { name: { contains: query.search, mode: 'insensitive' } },
+              ],
+            }
+          : {}),
+        ...(cursor
+          ? {
+              OR: [
+                { createdAt: { lt: new Date(cursor.createdAt) } },
+                { createdAt: new Date(cursor.createdAt), id: { lt: cursor.id } },
+              ],
+            }
+          : {}),
+      },
       include: {
         roleMappings: { include: { role: true } },
         _count: { select: { services: true } },
       },
-      orderBy: { name: 'asc' },
-      take: query.limit,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: query.limit + 1,
     });
+    return this.cursorPage(items, query.limit);
   }
 
   async createActivityField(dto: CreateActivityFieldDto) {
@@ -526,15 +785,34 @@ export class AdminService {
     });
   }
 
-  services(query: AdminListQueryDto) {
-    return this.prisma.service.findMany({
-      where: query.status
-        ? { status: this.enumValue(CatalogStatus, query.status) ?? undefined }
-        : {},
+  async services(query: AdminServiceQueryDto) {
+    const cursor = decodeCursor<{ createdAt: string; id: string }>(query.cursor);
+    const items = await this.prisma.service.findMany({
+      where: {
+        ...(query.status ? { status: query.status } : {}),
+        ...(query.activityFieldId ? { activityFieldId: query.activityFieldId } : {}),
+        ...(query.search
+          ? {
+              OR: [
+                { code: { contains: query.search, mode: 'insensitive' } },
+                { name: { contains: query.search, mode: 'insensitive' } },
+              ],
+            }
+          : {}),
+        ...(cursor
+          ? {
+              OR: [
+                { createdAt: { lt: new Date(cursor.createdAt) } },
+                { createdAt: new Date(cursor.createdAt), id: { lt: cursor.id } },
+              ],
+            }
+          : {}),
+      },
       include: { activityField: true },
-      orderBy: { name: 'asc' },
-      take: query.limit,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: query.limit + 1,
     });
+    return this.cursorPage(items, query.limit);
   }
 
   createService(dto: CreateServiceDto) {
@@ -564,14 +842,26 @@ export class AdminService {
     });
   }
 
-  legalDocuments(query: AdminListQueryDto) {
-    return this.prisma.legalDocument.findMany({
-      where: query.status
-        ? { status: this.enumValue(CatalogStatus, query.status) ?? undefined }
-        : {},
-      orderBy: [{ documentType: 'asc' }, { effectiveAt: 'desc' }],
-      take: query.limit,
+  async legalDocuments(query: AdminLegalDocumentQueryDto) {
+    const cursor = decodeCursor<{ createdAt: string; id: string }>(query.cursor);
+    const items = await this.prisma.legalDocument.findMany({
+      where: {
+        ...(query.status ? { status: query.status } : {}),
+        ...(query.documentType ? { documentType: query.documentType } : {}),
+        ...(query.search ? { version: { contains: query.search, mode: 'insensitive' } } : {}),
+        ...(cursor
+          ? {
+              OR: [
+                { createdAt: { lt: new Date(cursor.createdAt) } },
+                { createdAt: new Date(cursor.createdAt), id: { lt: cursor.id } },
+              ],
+            }
+          : {}),
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: query.limit + 1,
     });
+    return this.cursorPage(items, query.limit);
   }
 
   createLegalDocument(dto: CreateLegalDocumentDto) {
@@ -649,12 +939,33 @@ export class AdminService {
     };
   }
 
-  private enumValue<T extends Record<string, string>>(
-    values: T,
-    input?: string,
-  ): T[keyof T] | undefined {
-    if (!input) return undefined;
-    return Object.values(values).includes(input) ? (input as T[keyof T]) : undefined;
+  private dateRange(dateFrom?: string, dateTo?: string): Prisma.DateTimeFilter | undefined {
+    if (!dateFrom && !dateTo) return undefined;
+    const from = dateFrom ? new Date(dateFrom) : undefined;
+    const to = dateTo ? new Date(dateTo) : undefined;
+    if (from && to && from > to) {
+      throw new ApiError('INVALID_DATE_RANGE', 'Date from must not be later than date to');
+    }
+    return { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) };
+  }
+
+  private reportContextWhere(
+    contextType?: AdminReportQueryDto['contextType'],
+  ): Prisma.UserReportWhereInput {
+    switch (contextType) {
+      case 'MATCH':
+        return { matchId: { not: null } };
+      case 'CONVERSATION':
+        return { conversationId: { not: null } };
+      case 'MESSAGE':
+        return { messageId: { not: null } };
+      case 'BOOKING':
+        return { bookingId: { not: null } };
+      case 'USER':
+        return { matchId: null, conversationId: null, messageId: null, bookingId: null };
+      default:
+        return {};
+    }
   }
 
   private assertNoAdminRole(roles: RoleCode[]): void {

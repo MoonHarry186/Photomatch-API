@@ -393,9 +393,11 @@ export const MVP_RESPONSE_SCHEMAS: Record<string, Schema> = {
       },
       description: { type: 'string' },
       status: { type: 'string', enum: ['OPEN', 'IN_REVIEW', 'RESOLVED', 'REJECTED'] },
+      adminNote: nullableString(),
       resolution: nullableString(),
       evidence: { type: 'array', items: object({ assetId: uuid() }, ['assetId']) },
       createdAt: dateTime(),
+      updatedAt: dateTime(),
       resolvedAt: { ...dateTime(), nullable: true },
     },
     ['id', 'reportedUserId', 'reasonCode', 'status', 'createdAt'],
@@ -415,6 +417,8 @@ export const MVP_RESPONSE_SCHEMAS: Record<string, Schema> = {
       startsAt: dateTime(),
       endsAt: { ...dateTime(), nullable: true },
       revokedAt: { ...dateTime(), nullable: true },
+      revokeReason: nullableString(),
+      createdAt: dateTime(),
     },
     ['id', 'userId', 'penaltyType', 'reason', 'status', 'startsAt'],
   ),
@@ -435,14 +439,37 @@ export const MVP_RESPONSE_SCHEMAS: Record<string, Schema> = {
   ),
   AdminDashboardResponse: object(
     {
+      activeUsers: { type: 'integer' },
       users: { type: 'integer' },
       photographers: { type: 'integer' },
+      activeMatches: { type: 'integer' },
       matches: { type: 'integer' },
+      pendingBookings: { type: 'integer' },
       bookings: { type: 'integer' },
       openReports: { type: 'integer' },
       activePenalties: { type: 'integer' },
     },
-    ['users', 'photographers', 'matches', 'bookings', 'openReports', 'activePenalties'],
+    [
+      'activeUsers',
+      'photographers',
+      'activeMatches',
+      'pendingBookings',
+      'openReports',
+      'activePenalties',
+    ],
+  ),
+  AdminFeatureCodesResponse: object(
+    {
+      version: { type: 'string', enum: ['1.0.0'] },
+      items: {
+        type: 'array',
+        items: {
+          type: 'string',
+          enum: ['LOCATION', 'DISCOVERY', 'SWIPE', 'CHAT', 'BOOKING', 'REVIEW', 'UPLOAD'],
+        },
+      },
+    },
+    ['version', 'items'],
   ),
   MvpEntityResponse: { type: 'object', additionalProperties: true },
   DiscoveryCandidatePage: page('DiscoveryCandidateResponse'),
@@ -511,12 +538,14 @@ const DIRECT_RESPONSE: Record<string, string> = {
   TrustController_report: 'ReportResponse',
   DevicesController_register: 'DeviceResponse',
   AdminController_dashboard: 'AdminDashboardResponse',
+  AdminController_featureCodes: 'AdminFeatureCodesResponse',
   AdminController_userDetail: 'UserSummary',
   AdminController_userStatus: 'UserSummary',
   AdminController_reviewDetail: 'ReviewResponse',
   AdminController_moderateReview: 'ReviewResponse',
   AdminController_reportDetail: 'ReportResponse',
   AdminController_resolveReport: 'ReportResolutionResponse',
+  AdminController_reportStatus: 'ReportResolutionResponse',
   AdminController_createPenalty: 'PenaltyResponse',
   AdminController_penaltyDetail: 'PenaltyResponse',
   AdminController_revokePenalty: 'PenaltyResponse',
@@ -547,9 +576,6 @@ const ARRAY_RESPONSE: Record<string, string> = {
   ProfilesController_portfolio: 'PortfolioItemResponse',
   ProfilesController_reorderPortfolio: 'PortfolioItemResponse',
   TrustController_restrictions: 'PenaltyResponse',
-  AdminController_activityFields: 'CatalogItemResponse',
-  AdminController_services: 'CatalogItemResponse',
-  AdminController_legalDocuments: 'LegalDocumentResponse',
 };
 
 const ADMIN_PAGE_OPERATIONS = new Set([
@@ -559,6 +585,9 @@ const ADMIN_PAGE_OPERATIONS = new Set([
   'AdminController_reports',
   'AdminController_penalties',
   'AdminController_bookings',
+  'AdminController_activityFields',
+  'AdminController_services',
+  'AdminController_legalDocuments',
 ]);
 
 const STATUS_OPERATIONS = new Set([
@@ -588,6 +617,7 @@ const IDEMPOTENT_OPERATIONS = new Set([
   'AdminController_userStatus',
   'AdminController_moderateReview',
   'AdminController_resolveReport',
+  'AdminController_reportStatus',
   'AdminController_createPenalty',
   'AdminController_revokePenalty',
   'AdminController_legalStatus',

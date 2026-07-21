@@ -113,10 +113,14 @@ export class UploadsService {
     return this.serializeAsset(asset);
   }
 
-  async accessUrl(userId: string, assetId: string) {
-    const asset = await this.prisma.uploadAsset.findUnique({ where: { id: assetId } });
+  async accessUrl(userId: string, assetId: string, adminEvidenceAccess = false) {
+    const asset = await this.prisma.uploadAsset.findUnique({
+      where: { id: assetId },
+      include: { reportEvidence: { select: { reportId: true }, take: 1 } },
+    });
     if (!asset || asset.status !== UploadAssetStatus.USABLE) throw ApiError.notFound('Asset');
-    if (!asset.isPublic && asset.ownerUserId !== userId) {
+    const canInspectReportEvidence = adminEvidenceAccess && asset.reportEvidence.length > 0;
+    if (!asset.isPublic && asset.ownerUserId !== userId && !canInspectReportEvidence) {
       throw ApiError.forbidden('ASSET_ACCESS_DENIED', 'Asset is private');
     }
     const publicBase = this.config.get<string>('R2_PUBLIC_BASE_URL');

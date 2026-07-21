@@ -4,8 +4,10 @@ import {
   ArrayMaxSize,
   ArrayUnique,
   IsArray,
+  IsBoolean,
   IsDateString,
   IsEnum,
+  IsIn,
   IsOptional,
   IsString,
   IsUUID,
@@ -79,9 +81,53 @@ export class ResolveReportDto {
 
   @ApiPropertyOptional()
   @IsOptional()
+  @IsBoolean()
+  notifyUser?: boolean;
+
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsString()
   @MaxLength(3000)
   adminNote?: string;
+
+  @ApiPropertyOptional({ enum: PenaltyType })
+  @IsOptional()
+  @IsEnum(PenaltyType)
+  penaltyType?: PenaltyType;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  featureCode?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsDateString()
+  penaltyEndsAt?: string;
+}
+
+export class AdminReportStatusDto {
+  @ApiProperty({ enum: [ReportStatus.IN_REVIEW, ReportStatus.RESOLVED, ReportStatus.REJECTED] })
+  @IsIn([ReportStatus.IN_REVIEW, ReportStatus.RESOLVED, ReportStatus.REJECTED])
+  status!: ReportStatus;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(3000)
+  resolution?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(3000)
+  adminNote?: string;
+
+  @ApiPropertyOptional({ default: true })
+  @IsOptional()
+  @IsBoolean()
+  notifyUser = true;
 
   @ApiPropertyOptional({ enum: PenaltyType })
   @IsOptional()

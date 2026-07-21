@@ -55,6 +55,7 @@ const IDEMPOTENT_OPERATION_IDS = [
   'AdminController_userStatus',
   'AdminController_moderateReview',
   'AdminController_resolveReport',
+  'AdminController_reportStatus',
   'AdminController_createPenalty',
   'AdminController_revokePenalty',
   'AdminController_legalStatus',
@@ -81,6 +82,8 @@ describe('OpenAPI contract', () => {
       '/api/v1/uploads/{uploadId}/complete',
       '/api/v1/uploads/{assetId}/access-url',
       '/api/v1/admin/reports/{reportId}/resolve',
+      '/api/v1/admin/reports/{reportId}/status',
+      '/api/v1/admin/feature-codes',
       '/api/v1/admin/legal-documents/{id}/status',
     ];
     for (const path of expected) expect(document.paths).toHaveProperty(path);
@@ -100,7 +103,7 @@ describe('OpenAPI contract', () => {
   });
 
   it('publishes a concrete success schema for every HTTP operation', () => {
-    expect(allOperations).toHaveLength(111);
+    expect(allOperations).toHaveLength(113);
     for (const operation of allOperations) {
       const success = Object.entries(operation.responses).find(([code]) => code.startsWith('2'));
       expect(success).toBeDefined();
@@ -128,6 +131,9 @@ describe('OpenAPI contract', () => {
     expect(successSchema(document.paths['/api/v1/admin/reports/{reportId}/resolve'].post)).toEqual({
       $ref: '#/components/schemas/ReportResolutionResponse',
     });
+    expect(successSchema(document.paths['/api/v1/admin/reports/{reportId}/status'].post)).toEqual({
+      $ref: '#/components/schemas/ReportResolutionResponse',
+    });
   });
 
   it('publishes enums, UUIDs, rating bounds, and UTC date-time formats', () => {
@@ -153,6 +159,18 @@ describe('OpenAPI contract', () => {
     });
     expect(schemas.CreateBookingDto.properties?.serviceId.format).toBe('uuid');
     expect(schemas.CreateBookingDto.properties?.scheduledEnd.format).toBe('date-time');
+    expect(schemas.AdminFeatureCodesResponse.properties?.items.items?.enum).toEqual([
+      'LOCATION',
+      'DISCOVERY',
+      'SWIPE',
+      'CHAT',
+      'BOOKING',
+      'REVIEW',
+      'UPLOAD',
+    ]);
+    expect(schemas.AdminDashboardResponse.required).toEqual(
+      expect.arrayContaining(['activeUsers', 'activeMatches', 'pendingBookings']),
+    );
   });
 
   it('documents bounded cursor pagination in requests and responses', () => {
@@ -162,6 +180,9 @@ describe('OpenAPI contract', () => {
       '/api/v1/conversations/{conversationId}/messages',
       '/api/v1/bookings',
       '/api/v1/admin/users',
+      '/api/v1/admin/activity-fields',
+      '/api/v1/admin/services',
+      '/api/v1/admin/legal-documents',
     ];
     for (const path of paginatedPaths) {
       const operation = document.paths[path].get;
@@ -176,6 +197,57 @@ describe('OpenAPI contract', () => {
       expect(responseSchema.required).toEqual(expect.arrayContaining(['items', 'nextCursor']));
       expect(responseSchema.properties?.items.type).toBe('array');
       expect(responseSchema.properties?.nextCursor.type).toBe('string');
+    }
+  });
+
+  it('documents domain-specific Web Admin filters', () => {
+    const expected: Array<[string, string[]]> = [
+      ['/api/v1/admin/users', ['search', 'status', 'role', 'verificationStatus', 'cityId']],
+      [
+        '/api/v1/admin/photographers',
+        [
+          'status',
+          'accountStatus',
+          'profileStatus',
+          'verificationStatus',
+          'availabilityStatus',
+          'cityId',
+          'activityFieldId',
+          'serviceId',
+        ],
+      ],
+      [
+        '/api/v1/admin/reviews',
+        ['status', 'rating', 'dateFrom', 'dateTo', 'reviewerUserId', 'revieweeUserId'],
+      ],
+      [
+        '/api/v1/admin/reports',
+        [
+          'status',
+          'reasonCode',
+          'dateFrom',
+          'dateTo',
+          'reporterUserId',
+          'reportedUserId',
+          'contextType',
+        ],
+      ],
+      [
+        '/api/v1/admin/penalties',
+        ['status', 'penaltyType', 'userId', 'effectiveFrom', 'effectiveTo'],
+      ],
+      [
+        '/api/v1/admin/bookings',
+        ['status', 'dateFrom', 'dateTo', 'customerUserId', 'photographerUserId', 'serviceId'],
+      ],
+      ['/api/v1/admin/services', ['status', 'activityFieldId']],
+      ['/api/v1/admin/legal-documents', ['status', 'documentType']],
+    ];
+    for (const [path, names] of expected) {
+      const operation = document.paths[path].get;
+      for (const name of names) {
+        expect(parameter(operation, name)).toMatchObject({ in: 'query', required: false });
+      }
     }
   });
 

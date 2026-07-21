@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Param, ParseUUIDPipe, Post } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
+import { RoleCode } from '@prisma/client';
 import { CurrentUser, Idempotent } from '../common/auth-context';
 import type { AuthenticatedUser } from '../common/auth-context';
 import { CompleteUploadDto, PresignUploadDto } from './uploads.dto';
@@ -34,6 +35,10 @@ export class UploadsController {
     @CurrentUser() user: AuthenticatedUser,
     @Param('assetId', ParseUUIDPipe) assetId: string,
   ) {
-    return this.uploads.accessUrl(user.userId, assetId);
+    return this.uploads.accessUrl(
+      user.userId,
+      assetId,
+      user.audience === 'admin' && user.roles.includes(RoleCode.ADMIN),
+    );
   }
 }

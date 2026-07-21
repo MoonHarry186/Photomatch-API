@@ -10,10 +10,17 @@ import {
   UploadPurpose,
 } from '@prisma/client';
 import { ApiError } from '../common/api-error';
+import { FEATURE_RESTRICTION_CODES } from '../common/feature-codes';
 import { CursorPageDto, decodeCursor, encodeCursor } from '../common/pagination';
 import { PrismaService, TransactionClient } from '../database/prisma.service';
 import { UploadsService } from '../uploads/uploads.service';
-import { CreateBlockDto, CreatePenaltyDto, CreateReportDto, ResolveReportDto } from './trust.dto';
+import {
+  AdminReportStatusDto,
+  CreateBlockDto,
+  CreatePenaltyDto,
+  CreateReportDto,
+  ResolveReportDto,
+} from './trust.dto';
 
 @Injectable()
 export class TrustService {
@@ -185,7 +192,7 @@ export class TrustService {
         reportId: dto.reportId,
         imposedByUserId: adminUserId,
         penaltyType: dto.penaltyType,
-        featureCode: dto.featureCode,
+        featureCode: dto.featureCode?.trim().toUpperCase(),
         reason: dto.reason.trim(),
         startsAt: dto.startsAt ? new Date(dto.startsAt) : new Date(),
         endsAt: dto.endsAt ? new Date(dto.endsAt) : undefined,
@@ -256,17 +263,58 @@ export class TrustService {
   }
 
   async resolveReport(adminUserId: string, reportId: string, dto: ResolveReportDto) {
-    if (dto.status !== ReportStatus.RESOLVED && dto.status !== ReportStatus.REJECTED) {
-      throw new ApiError('INVALID_REPORT_STATUS', 'Report can only be resolved or rejected');
+    return this.updateReportStatus(adminUserId, reportId, {
+      ...dto,
+      notifyUser: dto.notifyUser ?? true,
+    });
+  }
+
+  async updateReportStatus(adminUserId: string, reportId: string, dto: AdminReportStatusDto) {
+    if (
+      dto.status !== ReportStatus.IN_REVIEW &&
+      dto.status !== ReportStatus.RESOLVED &&
+      dto.status !== ReportStatus.REJECTED
+    ) {
+      throw new ApiError('INVALID_REPORT_STATUS', 'Report status action is invalid');
+    }
+    if (dto.status === ReportStatus.IN_REVIEW) {
+      if (dto.penaltyType || dto.featureCode || dto.penaltyEndsAt) {
+        throw new ApiError(
+          'REPORT_PENALTY_FORBIDDEN',
+          'A penalty can only be created when resolving a report',
+        );
+      }
+      return this.prisma.transaction(async (tx) => {
+        const report = await tx.userReport.findUnique({ where: { id: reportId } });
+        if (!report) throw ApiError.notFound('Report');
+        if (report.status === ReportStatus.RESOLVED || report.status === ReportStatus.REJECTED) {
+          throw ApiError.conflict('REPORT_ALREADY_FINAL', 'Final report status cannot be reopened');
+        }
+        const updated = await tx.userReport.update({
+          where: { id: reportId },
+          data: { status: ReportStatus.IN_REVIEW, adminNote: dto.adminNote?.trim() },
+        });
+        return { report: updated, penalty: null };
+      });
+    }
+    if (!dto.resolution?.trim()) {
+      throw new ApiError('REPORT_RESOLUTION_REQUIRED', 'Final report status requires resolution');
+    }
+    const resolution = dto.resolution.trim();
+    if (dto.status === ReportStatus.REJECTED && dto.penaltyType) {
+      throw new ApiError('REPORT_PENALTY_FORBIDDEN', 'Rejected reports cannot create penalties');
     }
     return this.prisma.transaction(async (tx) => {
       const report = await tx.userReport.findUnique({ where: { id: reportId } });
       if (!report) throw ApiError.notFound('Report');
+      if (report.status === ReportStatus.RESOLVED || report.status === ReportStatus.REJECTED) {
+        throw ApiError.conflict('REPORT_ALREADY_FINAL', 'Final report status cannot be changed');
+      }
       const resolved = await tx.userReport.update({
         where: { id: reportId },
         data: {
           status: dto.status,
-          resolution: dto.resolution.trim(),
+          resolution,
           adminNote: dto.adminNote?.trim(),
           resolvedByUserId: adminUserId,
           resolvedAt: new Date(),
@@ -281,11 +329,20 @@ export class TrustService {
             reportId,
             penaltyType: dto.penaltyType,
             featureCode: dto.featureCode,
-            reason: dto.resolution,
+            reason: resolution,
             endsAt: dto.penaltyEndsAt,
           },
           tx,
         );
+      }
+      if (dto.notifyUser !== false) {
+        await tx.notification.create({
+          data: {
+            recipientUserId: report.reporterUserId,
+            notificationType: NotificationType.REPORT_RESOLVED,
+            payload: { reportId, status: dto.status, resolution },
+          },
+        });
       }
       return { report: resolved, penalty };
     });
@@ -335,6 +392,17 @@ export class TrustService {
   ): void {
     if (type === PenaltyType.FEATURE_RESTRICTION && !featureCode?.trim()) {
       throw new ApiError('FEATURE_CODE_REQUIRED', 'Feature restriction requires feature code');
+    }
+    if (
+      type === PenaltyType.FEATURE_RESTRICTION &&
+      !FEATURE_RESTRICTION_CODES.includes(
+        featureCode!.trim().toUpperCase() as (typeof FEATURE_RESTRICTION_CODES)[number],
+      )
+    ) {
+      throw new ApiError(
+        'FEATURE_CODE_INVALID',
+        `Feature code must be one of: ${FEATURE_RESTRICTION_CODES.join(', ')}`,
+      );
     }
     if (type !== PenaltyType.FEATURE_RESTRICTION && featureCode) {
       throw new ApiError(

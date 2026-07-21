@@ -211,7 +211,9 @@ describe('trust, safety, and admin operations (e2e)', () => {
       .expect(400);
 
     const users = await request(app.getHttpServer())
-      .get('/api/v1/admin/users?search=safety-customer&status=ACTIVE&limit=1')
+      .get(
+        '/api/v1/admin/users?search=safety-customer&status=ACTIVE&role=CUSTOMER&verificationStatus=NOT_SUBMITTED&limit=1',
+      )
       .set('authorization', `Bearer ${adminToken}`)
       .expect(200);
     expect(users.body.items).toHaveLength(1);
@@ -234,9 +236,24 @@ describe('trust, safety, and admin operations (e2e)', () => {
       .get('/api/v1/admin/dashboard/summary')
       .set('authorization', `Bearer ${adminToken}`)
       .expect(200)
-      .expect(({ body }) => expect(body.users).toBeGreaterThanOrEqual(4));
+      .expect(({ body }) => {
+        expect(body.activeUsers).toBeGreaterThanOrEqual(4);
+        expect(body.activeMatches).toBeGreaterThanOrEqual(1);
+        expect(body.pendingBookings).toBeGreaterThanOrEqual(0);
+        expect(body.users).toBe(body.activeUsers);
+      });
     await request(app.getHttpServer())
-      .get('/api/v1/admin/photographers?search=safety-photographer')
+      .get('/api/v1/admin/feature-codes')
+      .set('authorization', `Bearer ${adminToken}`)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.version).toBe('1.0.0');
+        expect(body.items).toEqual(expect.arrayContaining(['DISCOVERY', 'CHAT', 'BOOKING']));
+      });
+    await request(app.getHttpServer())
+      .get(
+        `/api/v1/admin/photographers?search=safety-photographer&accountStatus=ACTIVE&verificationStatus=NOT_SUBMITTED&availabilityStatus=AVAILABLE&serviceId=${serviceId}`,
+      )
       .set('authorization', `Bearer ${adminToken}`)
       .expect(200)
       .expect(({ body }) => expect(body.items[0].id).toBe(PHOTOGRAPHER_ROLE_ID));
@@ -245,7 +262,9 @@ describe('trust, safety, and admin operations (e2e)', () => {
       .set('authorization', `Bearer ${adminToken}`)
       .expect(200);
     await request(app.getHttpServer())
-      .get('/api/v1/admin/bookings?bookingStatus=COMPLETED&search=safety-customer')
+      .get(
+        `/api/v1/admin/bookings?status=COMPLETED&search=safety-customer&customerUserId=${CUSTOMER_ID}&photographerUserId=${PHOTOGRAPHER_ID}&serviceId=${serviceId}&dateFrom=${encodeURIComponent(new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())}&dateTo=${encodeURIComponent(new Date().toISOString())}`,
+      )
       .set('authorization', `Bearer ${adminToken}`)
       .expect(200)
       .expect(({ body }) =>
@@ -308,7 +327,9 @@ describe('trust, safety, and admin operations (e2e)', () => {
     expect(created.body.evidence).toEqual([{ assetId: ownEvidenceId }]);
 
     await request(app.getHttpServer())
-      .get('/api/v1/admin/reports?status=OPEN')
+      .get(
+        `/api/v1/admin/reports?status=OPEN&reasonCode=HARASSMENT&reporterUserId=${CUSTOMER_ID}&reportedUserId=${PHOTOGRAPHER_ID}&contextType=CONVERSATION`,
+      )
       .set('authorization', `Bearer ${adminToken}`)
       .expect(200)
       .expect(({ body: response }) =>
@@ -319,9 +340,21 @@ describe('trust, safety, and admin operations (e2e)', () => {
       .set('authorization', `Bearer ${adminToken}`)
       .expect(200)
       .expect(({ body: response }) => expect(response.evidence[0].assetId).toBe(ownEvidenceId));
+    await request(app.getHttpServer())
+      .get(`/api/v1/uploads/${ownEvidenceId}/access-url`)
+      .set('authorization', `Bearer ${adminToken}`)
+      .expect(200)
+      .expect(({ body: response }) => expect(response.url).toEqual(expect.any(String)));
   });
 
   it('resolves a report with temporary suspension and restores access after maintenance expiry', async () => {
+    await request(app.getHttpServer())
+      .post(`/api/v1/admin/reports/${reportId}/status`)
+      .set('authorization', `Bearer ${adminToken}`)
+      .set('idempotency-key', 'triage-report-e2e')
+      .send({ status: ReportStatus.IN_REVIEW, adminNote: 'Evidence review started' })
+      .expect(201)
+      .expect(({ body }) => expect(body.report.status).toBe(ReportStatus.IN_REVIEW));
     const resolved = await request(app.getHttpServer())
       .post(`/api/v1/admin/reports/${reportId}/resolve`)
       .set('authorization', `Bearer ${adminToken}`)
@@ -403,6 +436,18 @@ describe('trust, safety, and admin operations (e2e)', () => {
   });
 
   it('enforces and revokes a feature restriction at the chat boundary', async () => {
+    await request(app.getHttpServer())
+      .post('/api/v1/admin/penalties')
+      .set('authorization', `Bearer ${adminToken}`)
+      .set('idempotency-key', 'invalid-feature-restriction-e2e')
+      .send({
+        userId: CUSTOMER_ID,
+        penaltyType: PenaltyType.FEATURE_RESTRICTION,
+        featureCode: 'UNKNOWN_FEATURE',
+        reason: 'Unknown feature must be rejected',
+      })
+      .expect(400)
+      .expect(({ body }) => expect(body.code).toBe('FEATURE_CODE_INVALID'));
     const created = await request(app.getHttpServer())
       .post('/api/v1/admin/penalties')
       .set('authorization', `Bearer ${adminToken}`)
@@ -415,6 +460,15 @@ describe('trust, safety, and admin operations (e2e)', () => {
       })
       .expect(201);
     const penaltyId = created.body.id as string;
+    await request(app.getHttpServer())
+      .get(
+        `/api/v1/admin/penalties?status=ACTIVE&penaltyType=FEATURE_RESTRICTION&userId=${CUSTOMER_ID}`,
+      )
+      .set('authorization', `Bearer ${adminToken}`)
+      .expect(200)
+      .expect(({ body }) =>
+        expect(body.items.some((item: { id: string }) => item.id === penaltyId)).toBe(true),
+      );
     await request(app.getHttpServer())
       .get('/api/v1/me/restrictions')
       .set('authorization', `Bearer ${customerToken}`)
@@ -513,7 +567,9 @@ describe('trust, safety, and admin operations (e2e)', () => {
     });
     expect(review.moderatedAt).not.toBeNull();
     await request(app.getHttpServer())
-      .get('/api/v1/admin/reviews?status=HIDDEN')
+      .get(
+        `/api/v1/admin/reviews?status=HIDDEN&rating=4&reviewerUserId=${CUSTOMER_ID}&revieweeUserId=${PHOTOGRAPHER_ID}`,
+      )
       .set('authorization', `Bearer ${adminToken}`)
       .expect(200)
       .expect(({ body }) =>
@@ -532,6 +588,13 @@ describe('trust, safety, and admin operations (e2e)', () => {
         allowedRoles: [RoleCode.CUSTOMER, RoleCode.PHOTOGRAPHER],
       })
       .expect(201);
+    await request(app.getHttpServer())
+      .get('/api/v1/admin/activity-fields?search=Safety&status=ACTIVE&limit=10')
+      .set('authorization', `Bearer ${adminToken}`)
+      .expect(200)
+      .expect(({ body }) =>
+        expect(body.items.some((item: { id: string }) => item.id === field.body.id)).toBe(true),
+      );
     await request(app.getHttpServer())
       .get(`/api/v1/admin/activity-fields/${field.body.id}`)
       .set('authorization', `Bearer ${adminToken}`)
@@ -553,6 +616,13 @@ describe('trust, safety, and admin operations (e2e)', () => {
       })
       .expect(201);
     await request(app.getHttpServer())
+      .get(`/api/v1/admin/services?activityFieldId=${field.body.id}&status=ACTIVE&limit=10`)
+      .set('authorization', `Bearer ${adminToken}`)
+      .expect(200)
+      .expect(({ body }) =>
+        expect(body.items.some((item: { id: string }) => item.id === service.body.id)).toBe(true),
+      );
+    await request(app.getHttpServer())
       .get(`/api/v1/admin/services/${service.body.id}`)
       .set('authorization', `Bearer ${adminToken}`)
       .expect(200);
@@ -573,6 +643,13 @@ describe('trust, safety, and admin operations (e2e)', () => {
         effectiveAt: new Date(Date.now() + 60_000).toISOString(),
       })
       .expect(201);
+    await request(app.getHttpServer())
+      .get('/api/v1/admin/legal-documents?documentType=COMMUNITY_GUIDELINES&status=INACTIVE')
+      .set('authorization', `Bearer ${adminToken}`)
+      .expect(200)
+      .expect(({ body }) =>
+        expect(body.items.some((item: { id: string }) => item.id === legal.body.id)).toBe(true),
+      );
     await request(app.getHttpServer())
       .patch(`/api/v1/admin/legal-documents/${legal.body.id}`)
       .set('authorization', `Bearer ${adminToken}`)

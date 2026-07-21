@@ -1,41 +1,282 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  AccountStatus,
   BookingStatus,
   CatalogStatus,
+  IdentityVerificationStatus,
   LegalDocumentType,
+  PenaltyStatus,
+  PenaltyType,
+  PhotographerAvailabilityStatus,
+  ProfileStatus,
+  ReportReasonCode,
+  ReportStatus,
   ReviewStatus,
   RoleCode,
+  RoleStatus,
 } from '@prisma/client';
+import { Transform } from 'class-transformer';
 import {
   ArrayUnique,
   IsArray,
   IsDateString,
   IsEnum,
+  IsInt,
+  IsIn,
   IsOptional,
   IsString,
   IsUUID,
+  Max,
   MaxLength,
+  Min,
 } from 'class-validator';
 import { CursorPageDto } from '../common/pagination';
+import { FEATURE_RESTRICTION_CODES } from '../common/feature-codes';
 
-export class AdminListQueryDto extends CursorPageDto {
+export const ADMIN_FEATURE_CODES = FEATURE_RESTRICTION_CODES;
+
+export const ADMIN_REPORT_CONTEXT_TYPES = [
+  'USER',
+  'MATCH',
+  'CONVERSATION',
+  'MESSAGE',
+  'BOOKING',
+] as const;
+
+export type AdminReportContextType = (typeof ADMIN_REPORT_CONTEXT_TYPES)[number];
+
+export class AdminSearchQueryDto extends CursorPageDto {
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
   @MaxLength(120)
   search?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  status?: string;
 }
 
-export class AdminBookingQueryDto extends AdminListQueryDto {
+export class AdminUserQueryDto extends AdminSearchQueryDto {
+  @ApiPropertyOptional({ enum: AccountStatus })
+  @IsOptional()
+  @IsEnum(AccountStatus)
+  status?: AccountStatus;
+
+  @ApiPropertyOptional({ enum: RoleCode })
+  @IsOptional()
+  @IsEnum(RoleCode)
+  role?: RoleCode;
+
+  @ApiPropertyOptional({ enum: IdentityVerificationStatus })
+  @IsOptional()
+  @IsEnum(IdentityVerificationStatus)
+  verificationStatus?: IdentityVerificationStatus;
+
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID()
+  cityId?: string;
+}
+
+export class AdminPhotographerQueryDto extends AdminSearchQueryDto {
+  @ApiPropertyOptional({ enum: RoleStatus })
+  @IsOptional()
+  @IsEnum(RoleStatus)
+  status?: RoleStatus;
+
+  @ApiPropertyOptional({ enum: AccountStatus })
+  @IsOptional()
+  @IsEnum(AccountStatus)
+  accountStatus?: AccountStatus;
+
+  @ApiPropertyOptional({ enum: ProfileStatus })
+  @IsOptional()
+  @IsEnum(ProfileStatus)
+  profileStatus?: ProfileStatus;
+
+  @ApiPropertyOptional({ enum: IdentityVerificationStatus })
+  @IsOptional()
+  @IsEnum(IdentityVerificationStatus)
+  verificationStatus?: IdentityVerificationStatus;
+
+  @ApiPropertyOptional({ enum: PhotographerAvailabilityStatus })
+  @IsOptional()
+  @IsEnum(PhotographerAvailabilityStatus)
+  availabilityStatus?: PhotographerAvailabilityStatus;
+
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID()
+  cityId?: string;
+
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID()
+  activityFieldId?: string;
+
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID()
+  serviceId?: string;
+}
+
+export class AdminReviewQueryDto extends AdminSearchQueryDto {
+  @ApiPropertyOptional({ enum: ReviewStatus })
+  @IsOptional()
+  @IsEnum(ReviewStatus)
+  status?: ReviewStatus;
+
+  @ApiPropertyOptional({ minimum: 1, maximum: 5 })
+  @IsOptional()
+  @Transform(({ value }) => Number(value))
+  @IsInt()
+  @Min(1)
+  @Max(5)
+  rating?: number;
+
+  @ApiPropertyOptional({ format: 'date-time' })
+  @IsOptional()
+  @IsDateString()
+  dateFrom?: string;
+
+  @ApiPropertyOptional({ format: 'date-time' })
+  @IsOptional()
+  @IsDateString()
+  dateTo?: string;
+
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID()
+  reviewerUserId?: string;
+
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID()
+  revieweeUserId?: string;
+}
+
+export class AdminReportQueryDto extends AdminSearchQueryDto {
+  @ApiPropertyOptional({ enum: ReportStatus })
+  @IsOptional()
+  @IsEnum(ReportStatus)
+  status?: ReportStatus;
+
+  @ApiPropertyOptional({ enum: ReportReasonCode })
+  @IsOptional()
+  @IsEnum(ReportReasonCode)
+  reasonCode?: ReportReasonCode;
+
+  @ApiPropertyOptional({ format: 'date-time' })
+  @IsOptional()
+  @IsDateString()
+  dateFrom?: string;
+
+  @ApiPropertyOptional({ format: 'date-time' })
+  @IsOptional()
+  @IsDateString()
+  dateTo?: string;
+
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID()
+  reporterUserId?: string;
+
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID()
+  reportedUserId?: string;
+
+  @ApiPropertyOptional({ enum: ADMIN_REPORT_CONTEXT_TYPES })
+  @IsOptional()
+  @IsIn(ADMIN_REPORT_CONTEXT_TYPES)
+  contextType?: AdminReportContextType;
+}
+
+export class AdminPenaltyQueryDto extends AdminSearchQueryDto {
+  @ApiPropertyOptional({ enum: PenaltyStatus })
+  @IsOptional()
+  @IsEnum(PenaltyStatus)
+  status?: PenaltyStatus;
+
+  @ApiPropertyOptional({ enum: PenaltyType })
+  @IsOptional()
+  @IsEnum(PenaltyType)
+  penaltyType?: PenaltyType;
+
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID()
+  userId?: string;
+
+  @ApiPropertyOptional({ format: 'date-time' })
+  @IsOptional()
+  @IsDateString()
+  effectiveFrom?: string;
+
+  @ApiPropertyOptional({ format: 'date-time' })
+  @IsOptional()
+  @IsDateString()
+  effectiveTo?: string;
+}
+
+export class AdminBookingQueryDto extends AdminSearchQueryDto {
   @ApiPropertyOptional({ enum: BookingStatus })
   @IsOptional()
   @IsEnum(BookingStatus)
+  status?: BookingStatus;
+
+  @ApiPropertyOptional({ enum: BookingStatus, deprecated: true })
+  @IsOptional()
+  @IsEnum(BookingStatus)
   bookingStatus?: BookingStatus;
+
+  @ApiPropertyOptional({ format: 'date-time' })
+  @IsOptional()
+  @IsDateString()
+  dateFrom?: string;
+
+  @ApiPropertyOptional({ format: 'date-time' })
+  @IsOptional()
+  @IsDateString()
+  dateTo?: string;
+
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID()
+  customerUserId?: string;
+
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID()
+  photographerUserId?: string;
+
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID()
+  serviceId?: string;
+}
+
+export class AdminActivityFieldQueryDto extends AdminSearchQueryDto {
+  @ApiPropertyOptional({ enum: CatalogStatus })
+  @IsOptional()
+  @IsEnum(CatalogStatus)
+  status?: CatalogStatus;
+}
+
+export class AdminServiceQueryDto extends AdminActivityFieldQueryDto {
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID()
+  activityFieldId?: string;
+}
+
+export class AdminLegalDocumentQueryDto extends AdminSearchQueryDto {
+  @ApiPropertyOptional({ enum: CatalogStatus })
+  @IsOptional()
+  @IsEnum(CatalogStatus)
+  status?: CatalogStatus;
+
+  @ApiPropertyOptional({ enum: LegalDocumentType })
+  @IsOptional()
+  @IsEnum(LegalDocumentType)
+  documentType?: LegalDocumentType;
 }
 
 export class UserStatusActionDto {

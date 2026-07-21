@@ -4,10 +4,23 @@ import { Throttle } from '@nestjs/throttler';
 import { RoleCode } from '@prisma/client';
 import { CurrentUser, Idempotent, Roles } from '../common/auth-context';
 import type { AuthenticatedUser } from '../common/auth-context';
-import { CreatePenaltyDto, ResolveReportDto, RevokePenaltyDto } from '../trust/trust.dto';
 import {
+  AdminReportStatusDto,
+  CreatePenaltyDto,
+  ResolveReportDto,
+  RevokePenaltyDto,
+} from '../trust/trust.dto';
+import {
+  ADMIN_FEATURE_CODES,
+  AdminActivityFieldQueryDto,
   AdminBookingQueryDto,
-  AdminListQueryDto,
+  AdminLegalDocumentQueryDto,
+  AdminPenaltyQueryDto,
+  AdminPhotographerQueryDto,
+  AdminReportQueryDto,
+  AdminReviewQueryDto,
+  AdminServiceQueryDto,
+  AdminUserQueryDto,
   CreateActivityFieldDto,
   CreateLegalDocumentDto,
   CreateServiceDto,
@@ -33,8 +46,13 @@ export class AdminController {
     return this.admin.dashboard();
   }
 
+  @Get('feature-codes')
+  featureCodes() {
+    return { version: '1.0.0', items: ADMIN_FEATURE_CODES };
+  }
+
   @Get('users')
-  users(@Query() query: AdminListQueryDto) {
+  users(@Query() query: AdminUserQueryDto) {
     return this.admin.users(query);
   }
 
@@ -54,7 +72,7 @@ export class AdminController {
   }
 
   @Get('photographers')
-  photographers(@Query() query: AdminListQueryDto) {
+  photographers(@Query() query: AdminPhotographerQueryDto) {
     return this.admin.photographers(query);
   }
 
@@ -64,7 +82,7 @@ export class AdminController {
   }
 
   @Get('reviews')
-  reviews(@Query() query: AdminListQueryDto) {
+  reviews(@Query() query: AdminReviewQueryDto) {
     return this.admin.reviews(query);
   }
 
@@ -84,13 +102,23 @@ export class AdminController {
   }
 
   @Get('reports')
-  reports(@Query() query: AdminListQueryDto) {
+  reports(@Query() query: AdminReportQueryDto) {
     return this.admin.reports(query);
   }
 
   @Get('reports/:reportId')
   reportDetail(@Param('reportId', ParseUUIDPipe) reportId: string) {
     return this.admin.reportDetail(reportId);
+  }
+
+  @Post('reports/:reportId/status')
+  @Idempotent()
+  reportStatus(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('reportId', ParseUUIDPipe) reportId: string,
+    @Body() dto: AdminReportStatusDto,
+  ) {
+    return this.admin.reportStatus(user.userId, reportId, dto);
   }
 
   @Post('reports/:reportId/resolve')
@@ -104,7 +132,7 @@ export class AdminController {
   }
 
   @Get('penalties')
-  penalties(@Query() query: AdminListQueryDto) {
+  penalties(@Query() query: AdminPenaltyQueryDto) {
     return this.admin.penalties(query);
   }
 
@@ -140,7 +168,7 @@ export class AdminController {
   }
 
   @Get('activity-fields')
-  activityFields(@Query() query: AdminListQueryDto) {
+  activityFields(@Query() query: AdminActivityFieldQueryDto) {
     return this.admin.activityFields(query);
   }
 
@@ -160,7 +188,7 @@ export class AdminController {
   }
 
   @Get('services')
-  services(@Query() query: AdminListQueryDto) {
+  services(@Query() query: AdminServiceQueryDto) {
     return this.admin.services(query);
   }
 
@@ -180,7 +208,7 @@ export class AdminController {
   }
 
   @Get('legal-documents')
-  legalDocuments(@Query() query: AdminListQueryDto) {
+  legalDocuments(@Query() query: AdminLegalDocumentQueryDto) {
     return this.admin.legalDocuments(query);
   }
 
