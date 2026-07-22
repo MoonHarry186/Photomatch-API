@@ -26,6 +26,7 @@
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:validate": "prisma validate",
     "seed": "ts-node -r dotenv/config prisma/seed.ts",
+    "seed:admin-demo": "ts-node -r dotenv/config scripts/seed-admin-demo.ts",
     "create-admin": "ts-node -r dotenv/config scripts/create-admin.ts",
     "openapi:export": "ts-node scripts/export-openapi.ts",
     "migration:deploy": "node scripts/deploy-migrations.js"

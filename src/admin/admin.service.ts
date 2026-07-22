@@ -208,11 +208,26 @@ export class AdminService {
       throw new ApiError('INVALID_STATUS_ACTION', 'Action must be SUSPEND or RESTORE');
     }
     return this.prisma.transaction(async (tx) => {
-      const user = await tx.user.findUnique({ where: { id: userId } });
-      if (!user) throw ApiError.notFound('User');
+      const expectedStatus =
+        dto.action === 'SUSPEND' ? AccountStatus.ACTIVE : AccountStatus.SUSPENDED;
       const accountStatus =
         dto.action === 'SUSPEND' ? AccountStatus.SUSPENDED : AccountStatus.ACTIVE;
-      const updated = await tx.user.update({ where: { id: userId }, data: { accountStatus } });
+      const updated = await tx.user.updateMany({
+        where: { id: userId, accountStatus: expectedStatus },
+        data: { accountStatus },
+      });
+      if (updated.count !== 1) {
+        const current = await tx.user.findUnique({
+          where: { id: userId },
+          select: { accountStatus: true },
+        });
+        if (!current) throw ApiError.notFound('User');
+        throw ApiError.conflict(
+          'ACCOUNT_STATUS_CHANGED',
+          'Account status no longer permits this action',
+          { expectedStatus, currentStatus: current.accountStatus },
+        );
+      }
       if (dto.action === 'SUSPEND') {
         await tx.authSession.updateMany({
           where: { userId, revokedAt: null },
@@ -226,14 +241,14 @@ export class AdminService {
           eventType: 'admin.user_status.changed',
           payload: {
             userId,
-            previousStatus: user.accountStatus,
+            previousStatus: expectedStatus,
             newStatus: accountStatus,
             reason: dto.reason,
             adminUserId,
           },
         },
       });
-      return updated;
+      return tx.user.findUniqueOrThrow({ where: { id: userId } });
     });
   }
 
