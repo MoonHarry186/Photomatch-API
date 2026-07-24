@@ -33,6 +33,32 @@ export class ProfilesService {
     private readonly eligibility: EligibilityService,
   ) {}
 
+  async onboardingProgress(userId: string, currentRoleId?: string) {
+    if (!currentRoleId) {
+      return {
+        userRoleId: null,
+        role: null,
+        complete: false,
+        missing: ['role'],
+        discoveryEligible: false,
+        discoveryReasons: ['role'],
+      };
+    }
+    const role = await this.ownedRole(userId, currentRoleId);
+    const [onboarding, discovery] = await Promise.all([
+      this.eligibility.onboarding(userId, role.id),
+      this.eligibility.discovery(role.id),
+    ]);
+    return {
+      userRoleId: role.id,
+      role: role.role.code,
+      complete: onboarding.complete,
+      missing: onboarding.missing,
+      discoveryEligible: discovery.eligible,
+      discoveryReasons: discovery.reasons,
+    };
+  }
+
   async self(userId: string) {
     const profile = await this.prisma.userProfile.findUnique({
       where: { userId },

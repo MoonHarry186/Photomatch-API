@@ -164,6 +164,22 @@ describe('profile, catalog, and onboarding (e2e)', () => {
   });
 
   it('validates selections and resumes onboarding from persisted progress', async () => {
+    await request(app.getHttpServer())
+      .get('/api/v1/me/onboarding/progress')
+      .set('authorization', `Bearer ${token}`)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body).toEqual(
+          expect.objectContaining({
+            userRoleId: PHOTOGRAPHER_ROLE_ID,
+            role: RoleCode.PHOTOGRAPHER,
+            complete: false,
+            discoveryEligible: false,
+            missing: expect.arrayContaining(['displayName', 'portfolioImages']),
+            discoveryReasons: expect.any(Array),
+          }),
+        );
+      });
     await expect(eligibility.onboarding(USER_ID, PHOTOGRAPHER_ROLE_ID)).resolves.toEqual(
       expect.objectContaining({
         complete: false,
@@ -244,6 +260,14 @@ describe('profile, catalog, and onboarding (e2e)', () => {
     await expect(prisma.user.findUniqueOrThrow({ where: { id: USER_ID } })).resolves.toEqual(
       expect.objectContaining({ onboardingCompletedAt: expect.any(Date) }),
     );
+    await request(app.getHttpServer())
+      .get('/api/v1/me/onboarding/progress')
+      .set('authorization', `Bearer ${token}`)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.complete).toBe(true);
+        expect(body.missing).toEqual([]);
+      });
   });
 
   it('persists privacy settings without exposing them or exact GPS publicly', async () => {

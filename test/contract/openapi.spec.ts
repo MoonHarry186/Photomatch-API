@@ -72,6 +72,7 @@ describe('OpenAPI contract', () => {
       '/api/v1/roles/available',
       '/api/v1/cities',
       '/api/v1/legal-documents/current',
+      '/api/v1/me/onboarding/progress',
       '/api/v1/me/profile',
       '/api/v1/me/location',
       '/api/v1/discovery/candidates',
@@ -103,7 +104,7 @@ describe('OpenAPI contract', () => {
   });
 
   it('publishes a concrete success schema for every HTTP operation', () => {
-    expect(allOperations).toHaveLength(113);
+    expect(allOperations).toHaveLength(114);
     for (const operation of allOperations) {
       const success = Object.entries(operation.responses).find(([code]) => code.startsWith('2'));
       expect(success).toBeDefined();
@@ -118,6 +119,13 @@ describe('OpenAPI contract', () => {
   it('uses domain response models for critical generated-client workflows', () => {
     expect(successSchema(document.paths['/api/v1/auth/sign-in'].post)).toEqual({
       $ref: '#/components/schemas/AuthSessionResponse',
+    });
+    expect(successSchema(document.paths['/api/v1/me/onboarding/progress'].get)).toEqual({
+      $ref: '#/components/schemas/OnboardingProgressResponse',
+    });
+    expect(successSchema(document.paths['/api/v1/me/consents'].get)).toEqual({
+      type: 'array',
+      items: { $ref: '#/components/schemas/ConsentResponse' },
     });
     expect(successSchema(document.paths['/api/v1/discovery/candidates'].get)).toEqual({
       $ref: '#/components/schemas/DiscoveryCandidatePage',

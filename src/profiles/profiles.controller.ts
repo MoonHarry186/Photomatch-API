@@ -36,6 +36,11 @@ import { ProfilesService } from './profiles.service';
 export class ProfilesController {
   constructor(private readonly profiles: ProfilesService) {}
 
+  @Get('me/onboarding/progress')
+  onboardingProgress(@CurrentUser() user: AuthenticatedUser) {
+    return this.profiles.onboardingProgress(user.userId, user.currentRoleId);
+  }
+
   @Get('me/profile')
   self(@CurrentUser() user: AuthenticatedUser) {
     return this.profiles.self(user.userId);

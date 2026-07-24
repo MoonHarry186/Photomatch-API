@@ -161,6 +161,21 @@ export const MVP_RESPONSE_SCHEMAS: Record<string, Schema> = {
     },
     ['userId', 'legalDocumentId', 'acceptedAt', 'legalDocument'],
   ),
+  OnboardingProgressResponse: object(
+    {
+      userRoleId: { ...uuid(), nullable: true },
+      role: {
+        type: 'string',
+        enum: ['CUSTOMER', 'PHOTOGRAPHER'],
+        nullable: true,
+      },
+      complete: { type: 'boolean' },
+      missing: { type: 'array', items: { type: 'string' } },
+      discoveryEligible: { type: 'boolean' },
+      discoveryReasons: { type: 'array', items: { type: 'string' } },
+    },
+    ['userRoleId', 'role', 'complete', 'missing', 'discoveryEligible', 'discoveryReasons'],
+  ),
   ProfileResponse: object(
     {
       id: uuid(),
@@ -498,6 +513,7 @@ const DIRECT_RESPONSE: Record<string, string> = {
   UploadsController_complete: 'UploadAssetResponse',
   UploadsController_accessUrl: 'AssetAccessResponse',
   ProfilesController_self: 'ProfileResponse',
+  ProfilesController_onboardingProgress: 'OnboardingProgressResponse',
   ProfilesController_updateSelf: 'ProfileResponse',
   ProfilesController_publicProfile: 'ProfileResponse',
   ProfilesController_attachAvatar: 'ProfileResponse',
@@ -572,7 +588,7 @@ const ARRAY_RESPONSE: Record<string, string> = {
   ProfilesController_replaceFields: 'CatalogItemResponse',
   ProfilesController_services: 'CatalogItemResponse',
   ProfilesController_replaceServices: 'CatalogItemResponse',
-  ProfilesController_consents: 'MvpEntityResponse',
+  ProfilesController_consents: 'ConsentResponse',
   ProfilesController_portfolio: 'PortfolioItemResponse',
   ProfilesController_reorderPortfolio: 'PortfolioItemResponse',
   TrustController_restrictions: 'PenaltyResponse',
