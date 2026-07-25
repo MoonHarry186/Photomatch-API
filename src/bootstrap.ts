@@ -1,11 +1,14 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { ApiExceptionFilter } from './common/api-exception.filter';
 
 export function configureApplication(app: INestApplication): void {
+  const config = app.get(ConfigService);
+
   app.setGlobalPrefix('api/v1');
   app.enableCors({
-    origin: process.env.CORS_ORIGINS?.split(',').map((value) => value.trim()) ?? [],
+    origin: config.get<string[]>('CORS_ORIGINS') ?? [],
     credentials: true,
   });
   app.useGlobalPipes(

@@ -8,9 +8,15 @@ describe('API boundary (e2e)', () => {
   let app: INestApplication;
 
   beforeAll(async () => {
+    const previousCorsOrigins = process.env.CORS_ORIGINS;
+    process.env.CORS_ORIGINS = 'http://localhost:3001';
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleRef.createNestApplication();
+    delete process.env.CORS_ORIGINS;
     configureApplication(app);
+    if (previousCorsOrigins !== undefined) {
+      process.env.CORS_ORIGINS = previousCorsOrigins;
+    }
     await app.init();
   });
 
@@ -21,6 +27,15 @@ describe('API boundary (e2e)', () => {
       .get('/api/v1/health/live')
       .expect(200)
       .expect(({ body }) => expect(body.status).toBe('ok'));
+  });
+
+  it('allows the browser origins loaded by the validated configuration', async () => {
+    await request(app.getHttpServer())
+      .options('/api/v1/health/live')
+      .set('Origin', 'http://localhost:3001')
+      .set('Access-Control-Request-Method', 'GET')
+      .expect('Access-Control-Allow-Origin', 'http://localhost:3001')
+      .expect(204);
   });
 
   it('returns the common security error shape', async () => {
