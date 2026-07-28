@@ -11,7 +11,7 @@ The generated client must not use endpoint strings from the older product-plan t
 
 | Mobile surface | Implemented operations | Contract readiness |
 | --- | --- | --- |
-| Bootstrap/auth | `/auth/sign-up`, `/auth/sign-in`, `/auth/oauth`, `/auth/verify-email`, `/auth/resend-verification`, `/auth/change-pending-email`, `/auth/forgot-password`, `/auth/reset-password`, `/auth/refresh`, `/auth/sign-out`, `/me`, `/me/restrictions` | Keep implemented `/auth/refresh`; add typed onboarding progress and restriction schemas. |
+| Bootstrap/auth | `/auth/sign-up`, `/auth/sign-in`, `/auth/oauth`, `/auth/verify-email`, `/auth/resend-verification`, `/auth/forgot-password`, `/auth/verify-password-reset-otp`, `/auth/reset-password`, `/auth/refresh`, `/auth/sign-out`, `/me`, `/me/restrictions` | Password recovery uses a six-digit OTP followed by a short-lived one-time reset grant. |
 | Onboarding | `/roles/available`, `/me/roles`, `/me/current-role`, `/cities`, `/activity-fields`, `/services`, `/legal-documents/current`, `/me/consents`, `/me/profile`, `/me/profile/avatar`, `/me/location` | Add `/me/onboarding/progress`; type self profile, selected fields/services, and consent responses. |
 | Profiles/portfolio | `/profiles/{userRoleId}`, `/me/photographer-profile`, role-scoped owned portfolio routes, `/photographers/{photographerRoleId}/portfolio` | Type distinct public/Photographer/portfolio read models; keep role-scoped portfolio paths. |
 | Discovery/Nearby | `/me/discovery-presence`, `/discovery/candidates`, `/nearby`, `/swipes` | Enrich discovery card summary; make Nearby return only obfuscated `discovery_presence.public_point` coordinates. |

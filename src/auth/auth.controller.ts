@@ -5,7 +5,6 @@ import type { Request } from 'express';
 import { CurrentUser, Public } from '../common/auth-context';
 import type { AuthenticatedUser } from '../common/auth-context';
 import {
-  ChangePendingEmailDto,
   EmailDto,
   OAuthSignInDto,
   RefreshDto,
@@ -13,6 +12,7 @@ import {
   SignInDto,
   SignUpDto,
   VerifyEmailDto,
+  VerifyPasswordResetOtpDto,
 } from './auth.dto';
 import { AuthService } from './auth.service';
 
@@ -24,15 +24,18 @@ export class AuthController {
   @Public()
   @Post('sign-up')
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
-  signUp(@Body() dto: SignUpDto) {
-    return this.auth.signUp(dto);
+  signUp(@Body() dto: SignUpDto, @Req() request: Request) {
+    return this.auth.signUp(dto, request.ip);
   }
 
   @Public()
   @Post('verify-email')
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
-  verifyEmail(@Body() dto: VerifyEmailDto) {
-    return this.auth.verifyEmail(dto.token);
+  verifyEmail(@Body() dto: VerifyEmailDto, @Req() request: Request) {
+    return this.auth.verifyEmail(dto.challengeId, dto.otp, {
+      ...this.sessionContext(request),
+      deviceId: dto.deviceId ?? request.header('x-device-id'),
+    });
   }
 
   @Public()
@@ -40,13 +43,6 @@ export class AuthController {
   @Throttle({ default: { limit: 3, ttl: 60_000 } })
   resend(@Body() dto: EmailDto) {
     return this.auth.resendVerification(dto.email);
-  }
-
-  @Public()
-  @Post('change-pending-email')
-  @Throttle({ default: { limit: 3, ttl: 60_000 } })
-  changePendingEmail(@Body() dto: ChangePendingEmailDto) {
-    return this.auth.changePendingEmail(dto);
   }
 
   @Public()
@@ -78,10 +74,17 @@ export class AuthController {
   }
 
   @Public()
+  @Post('verify-password-reset-otp')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  verifyPasswordResetOtp(@Body() dto: VerifyPasswordResetOtpDto) {
+    return this.auth.verifyPasswordResetOtp(dto.challengeId, dto.otp);
+  }
+
+  @Public()
   @Post('reset-password')
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   resetPassword(@Body() dto: ResetPasswordDto) {
-    return this.auth.resetPassword(dto.token, dto.newPassword);
+    return this.auth.resetPassword(dto.resetToken, dto.newPassword);
   }
 
   @ApiBearerAuth()

@@ -4,18 +4,19 @@ import { JwtService } from '@nestjs/jwt';
 import {
   AccountStatus,
   AuthProvider,
+  CatalogStatus,
   Prisma,
   PenaltyStatus,
   RoleCode,
   RoleStatus,
 } from '@prisma/client';
 import * as argon2 from 'argon2';
-import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, randomBytes, randomInt, randomUUID, timingSafeEqual } from 'node:crypto';
 import { ApiError } from '../common/api-error';
 import { AuthenticatedUser } from '../common/auth-context';
 import { PrismaService, TransactionClient } from '../database/prisma.service';
 import { EmailPort, OAuthVerifierPort } from '../integrations/integration.ports';
-import { ChangePendingEmailDto, OAuthSignInDto, SignInDto, SignUpDto } from './auth.dto';
+import { OAuthSignInDto, SignInDto, SignUpDto } from './auth.dto';
 
 export interface TokenPair {
   accessToken: string;
@@ -30,6 +31,34 @@ interface SessionContext {
   ipAddress?: string;
 }
 
+const EMAIL_OTP_TTL_SECONDS = 10 * 60;
+const EMAIL_OTP_RESEND_SECONDS = 60;
+const EMAIL_OTP_MAX_ATTEMPTS = 5;
+const PASSWORD_RESET_OTP_TTL_SECONDS = 10 * 60;
+const PASSWORD_RESET_OTP_RESEND_SECONDS = 60;
+const PASSWORD_RESET_OTP_MAX_ATTEMPTS = 5;
+const PASSWORD_RESET_GRANT_TTL_SECONDS = 10 * 60;
+
+export interface VerificationChallengeResponse {
+  challengeId: string;
+  expiresIn: number;
+  resendAfter: number;
+}
+
+export interface VerificationRequiredResponse extends VerificationChallengeResponse {
+  status: 'verification_required';
+}
+
+export interface VerificationAcceptedResponse extends VerificationChallengeResponse {
+  status: 'accepted';
+}
+
+export interface PasswordResetVerifiedResponse {
+  status: 'verified';
+  resetToken: string;
+  expiresIn: number;
+}
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -40,13 +69,29 @@ export class AuthService {
     private readonly oauth: OAuthVerifierPort,
   ) {}
 
-  async signUp(dto: SignUpDto): Promise<{ status: 'verification_required' }> {
+  async signUp(dto: SignUpDto, ipAddress?: string): Promise<VerificationRequiredResponse> {
     const email = dto.email.trim().toLowerCase();
-    const existing = await this.prisma.user.findUnique({ where: { email }, select: { id: true } });
-    if (existing) return { status: 'verification_required' };
+    const existing = await this.prisma.user.findUnique({
+      where: { email },
+      select: { id: true, accountStatus: true, emailVerified: true },
+    });
+    if (existing) {
+      if (
+        !existing.emailVerified &&
+        existing.accountStatus === AccountStatus.PENDING_VERIFICATION
+      ) {
+        const active = await this.activeVerificationChallenge(existing.id);
+        if (active) return this.requiredChallenge(active);
+        const issued = await this.prisma.transaction((tx) =>
+          this.createVerificationChallenge(tx, existing.id),
+        );
+        await this.sendVerification(email, issued.otp);
+        return this.requiredChallenge(issued.record);
+      }
+      return this.dummyRequiredChallenge();
+    }
     const passwordHash = await argon2.hash(dto.password, { type: argon2.argon2id });
-    const token = this.randomToken();
-    await this.prisma.transaction(async (tx) => {
+    const issued = await this.prisma.transaction(async (tx) => {
       const customer = await tx.role.findUnique({ where: { code: RoleCode.CUSTOMER } });
       if (!customer || customer.status !== RoleStatus.ACTIVE)
         throw ApiError.notFound('Customer role');
@@ -63,94 +108,119 @@ export class AuthService {
         include: { roles: true },
       });
       await tx.user.update({ where: { id: user.id }, data: { currentRoleId: user.roles[0].id } });
-      await this.storeVerificationToken(tx, user.id, token);
+      await this.recordCurrentLegalConsents(tx, user.id, ipAddress);
+      return this.createVerificationChallenge(tx, user.id);
     });
-    await this.sendVerification(email, token);
-    return { status: 'verification_required' };
+    await this.sendVerification(email, issued.otp);
+    return this.requiredChallenge(issued.record);
   }
 
-  async verifyEmail(token: string): Promise<{ status: 'verified' }> {
-    const tokenHash = this.hashToken(token);
-    await this.prisma.transaction(async (tx) => {
-      const record = await tx.emailVerificationToken.findUnique({ where: { tokenHash } });
-      if (!record || record.consumedAt || record.expiresAt <= new Date()) {
+  async verifyEmail(challengeId: string, otp: string, context: SessionContext) {
+    const record = await this.prisma.emailVerificationToken.findUnique({
+      where: { id: challengeId },
+    });
+    if (!record || record.consumedAt) this.invalidVerificationCode();
+    if (record.expiresAt <= new Date()) {
+      throw new ApiError('VERIFICATION_CODE_EXPIRED', 'Verification code has expired');
+    }
+    if (record.lockedAt || record.attemptCount >= EMAIL_OTP_MAX_ATTEMPTS) {
+      throw new ApiError(
+        'VERIFICATION_ATTEMPTS_EXCEEDED',
+        'Too many incorrect verification attempts',
+      );
+    }
+    const expectedHash = this.hashVerificationCode(record.id, otp);
+    if (!this.safeHashEquals(record.tokenHash, expectedHash)) {
+      await this.prisma.emailVerificationToken.updateMany({
+        where: {
+          id: record.id,
+          consumedAt: null,
+          lockedAt: null,
+          attemptCount: { lt: EMAIL_OTP_MAX_ATTEMPTS },
+          expiresAt: { gt: new Date() },
+        },
+        data: { attemptCount: { increment: 1 } },
+      });
+      const failed = await this.prisma.emailVerificationToken.findUniqueOrThrow({
+        where: { id: record.id },
+        select: { attemptCount: true, lockedAt: true },
+      });
+      if (failed.lockedAt || failed.attemptCount >= EMAIL_OTP_MAX_ATTEMPTS) {
+        await this.prisma.emailVerificationToken.updateMany({
+          where: { id: record.id, lockedAt: null },
+          data: { lockedAt: new Date() },
+        });
         throw new ApiError(
-          'VERIFICATION_TOKEN_INVALID',
-          'Verification token is invalid or expired',
+          'VERIFICATION_ATTEMPTS_EXCEEDED',
+          'Too many incorrect verification attempts',
         );
       }
-      await tx.emailVerificationToken.update({
-        where: { id: record.id },
+      this.invalidVerificationCode();
+    }
+    const authenticated = await this.prisma.transaction(async (tx) => {
+      const consumed = await tx.emailVerificationToken.updateMany({
+        where: {
+          id: record.id,
+          consumedAt: null,
+          lockedAt: null,
+          attemptCount: { lt: EMAIL_OTP_MAX_ATTEMPTS },
+          expiresAt: { gt: new Date() },
+          tokenHash: expectedHash,
+        },
         data: { consumedAt: new Date() },
       });
+      if (consumed.count !== 1) this.invalidVerificationCode();
       await tx.emailVerificationToken.updateMany({
         where: { userId: record.userId, consumedAt: null, id: { not: record.id } },
         data: { consumedAt: new Date() },
       });
-      await tx.user.update({
+      const user = await tx.user.update({
         where: { id: record.userId },
         data: { emailVerified: true, accountStatus: AccountStatus.ACTIVE },
+        include: { roles: { include: { role: true } } },
       });
+      const roles = user.roles.map((item) => item.role.code);
+      const tokens = await this.createSession(
+        user.id,
+        roles,
+        user.currentRoleId,
+        'mobile',
+        context,
+        tx,
+      );
+      await tx.user.update({
+        where: { id: user.id },
+        data: { lastLoginAt: new Date() },
+      });
+      return { tokens, user, roles };
     });
-    return { status: 'verified' };
+    return this.authSessionResponse(authenticated.tokens, authenticated.user, authenticated.roles);
   }
 
-  async resendVerification(emailInput: string): Promise<{ status: 'accepted' }> {
+  async resendVerification(emailInput: string): Promise<VerificationAcceptedResponse> {
     const email = emailInput.trim().toLowerCase();
     const user = await this.prisma.user.findUnique({ where: { email } });
     if (!user || user.emailVerified || user.accountStatus !== AccountStatus.PENDING_VERIFICATION) {
-      return { status: 'accepted' };
+      return this.dummyAcceptedChallenge();
     }
     const latest = await this.prisma.emailVerificationToken.findFirst({
-      where: { userId: user.id },
+      where: {
+        userId: user.id,
+        consumedAt: null,
+        lockedAt: null,
+        attemptCount: { lt: EMAIL_OTP_MAX_ATTEMPTS },
+        expiresAt: { gt: new Date() },
+      },
       orderBy: { createdAt: 'desc' },
     });
-    if (latest && latest.createdAt > new Date(Date.now() - 60_000)) return { status: 'accepted' };
-    const token = this.randomToken();
-    await this.prisma.transaction(async (tx) => this.storeVerificationToken(tx, user.id, token));
-    await this.sendVerification(email, token);
-    return { status: 'accepted' };
-  }
-
-  async changePendingEmail(
-    dto: ChangePendingEmailDto,
-  ): Promise<{ status: 'verification_required' }> {
-    const currentEmail = dto.currentEmail.trim().toLowerCase();
-    const newEmail = dto.newEmail.trim().toLowerCase();
-    const user = await this.prisma.user.findUnique({
-      where: { email: currentEmail },
-      include: { authIdentities: { where: { provider: AuthProvider.EMAIL } } },
-    });
-    if (
-      !user?.email ||
-      user.emailVerified ||
-      user.accountStatus !== AccountStatus.PENDING_VERIFICATION ||
-      !user.authIdentities[0]?.passwordHash
-    ) {
-      throw new ApiError('PENDING_ACCOUNT_NOT_FOUND', 'Pending account could not be verified');
+    if (latest && latest.createdAt > new Date(Date.now() - EMAIL_OTP_RESEND_SECONDS * 1000)) {
+      return this.acceptedChallenge(latest);
     }
-    if (!(await argon2.verify(user.authIdentities[0].passwordHash, dto.password))) {
-      throw new ApiError(
-        'INVALID_CREDENTIALS',
-        'Email or password is incorrect',
-        HttpStatus.UNAUTHORIZED,
-      );
-    }
-    const token = this.randomToken();
-    await this.prisma.transaction(async (tx) => {
-      await tx.user.update({ where: { id: user.id }, data: { email: newEmail } });
-      await tx.authIdentity.update({
-        where: { id: user.authIdentities[0].id },
-        data: { email: newEmail },
-      });
-      await tx.emailVerificationToken.updateMany({
-        where: { userId: user.id, consumedAt: null },
-        data: { consumedAt: new Date() },
-      });
-      await this.storeVerificationToken(tx, user.id, token);
-    });
-    await this.sendVerification(newEmail, token);
-    return { status: 'verification_required' };
+    const issued = await this.prisma.transaction((tx) =>
+      this.createVerificationChallenge(tx, user.id),
+    );
+    await this.sendVerification(email, issued.otp);
+    return this.acceptedChallenge(issued.record);
   }
 
   async signIn(dto: SignInDto, context: SessionContext, audience: 'mobile' | 'admin' = 'mobile') {
@@ -180,6 +250,7 @@ export class AuthService {
       roles,
       audience,
     );
+    await this.recordCurrentLegalConsents(this.prisma, identity.user.id, context.ipAddress);
     const tokens = await this.createSession(
       identity.user.id,
       roles,
@@ -194,10 +265,7 @@ export class AuthService {
       where: { id: identity.user.id },
       data: { lastLoginAt: new Date() },
     });
-    return {
-      ...tokens,
-      user: this.userSummary(identity.user, roles),
-    };
+    return this.authSessionResponse(tokens, identity.user, roles);
   }
 
   async oauthSignIn(dto: OAuthSignInDto, context: SessionContext) {
@@ -259,14 +327,15 @@ export class AuthService {
     const roles = user.roles.map((item) => item.role.code);
     await this.assertAccountAccess(user.id, user.accountStatus);
     this.assertSignInAllowed(user.accountStatus, user.emailVerified, roles, 'mobile');
+    await this.recordCurrentLegalConsents(this.prisma, user.id, context.ipAddress);
     const tokens = await this.createSession(user.id, roles, user.currentRoleId, 'mobile', {
       ...context,
       deviceId: dto.deviceId ?? context.deviceId,
     });
-    return { ...tokens, user: this.userSummary(user, roles) };
+    return this.authSessionResponse(tokens, user, roles);
   }
 
-  async refresh(refreshToken: string, context: SessionContext): Promise<TokenPair> {
+  async refresh(refreshToken: string, context: SessionContext) {
     let claims: { sub: string; sid: string; fid: string; aud: 'mobile' | 'admin'; typ: string };
     try {
       claims = await this.jwt.verifyAsync(refreshToken, {
@@ -316,7 +385,7 @@ export class AuthService {
       );
     }
     const roles = session.user.roles.map((item) => item.role.code);
-    return this.rotateSession(
+    const tokens = await this.rotateSession(
       session.id,
       session.tokenFamilyId,
       session.userId,
@@ -325,6 +394,7 @@ export class AuthService {
       claims.aud,
       context,
     );
+    return this.authSessionResponse(tokens, session.user, roles);
   }
 
   async signOut(user: AuthenticatedUser): Promise<{ status: 'signed_out' }> {
@@ -335,42 +405,177 @@ export class AuthService {
     return { status: 'signed_out' };
   }
 
-  async forgotPassword(emailInput: string): Promise<{ status: 'accepted' }> {
+  async forgotPassword(emailInput: string): Promise<VerificationAcceptedResponse> {
     const email = emailInput.trim().toLowerCase();
-    const user = await this.prisma.user.findUnique({ where: { email } });
-    if (!user || !user.emailVerified) return { status: 'accepted' };
-    const token = this.randomToken();
-    await this.prisma.passwordResetToken.create({
-      data: {
-        userId: user.id,
-        tokenHash: this.hashToken(token),
-        expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+    const user = await this.prisma.user.findUnique({
+      where: { email },
+      include: {
+        authIdentities: {
+          where: { provider: AuthProvider.EMAIL },
+          select: { id: true },
+        },
       },
     });
-    await this.email.send({
-      to: email,
-      subject: 'Reset your Photomatch password',
-      text: `Use this single-use token to reset your password: ${token}`,
+    if (!user || !user.emailVerified || !user.authIdentities.length) {
+      return this.dummyPasswordResetChallenge();
+    }
+    const latest = await this.prisma.passwordResetToken.findFirst({
+      where: {
+        userId: user.id,
+        consumedAt: null,
+        verifiedAt: null,
+        lockedAt: null,
+        attemptCount: { lt: PASSWORD_RESET_OTP_MAX_ATTEMPTS },
+        expiresAt: { gt: new Date() },
+      },
+      orderBy: { createdAt: 'desc' },
     });
-    return { status: 'accepted' };
+    if (
+      latest &&
+      latest.createdAt > new Date(Date.now() - PASSWORD_RESET_OTP_RESEND_SECONDS * 1000)
+    ) {
+      return this.passwordResetChallenge(latest);
+    }
+    const issued = await this.prisma.transaction((tx) =>
+      this.createPasswordResetChallenge(tx, user.id),
+    );
+    try {
+      await this.email.send({
+        to: email,
+        subject: 'Photomatch password reset code',
+        text: `Your Photomatch password reset code is: ${issued.otp}. It expires in 10 minutes.`,
+      });
+    } catch (error) {
+      await this.prisma.passwordResetToken.updateMany({
+        where: { id: issued.record.id, consumedAt: null },
+        data: { consumedAt: new Date() },
+      });
+      throw error;
+    }
+    return this.passwordResetChallenge(issued.record);
   }
 
-  async resetPassword(token: string, newPassword: string): Promise<{ status: 'password_reset' }> {
+  async verifyPasswordResetOtp(
+    challengeId: string,
+    otp: string,
+  ): Promise<PasswordResetVerifiedResponse> {
     const record = await this.prisma.passwordResetToken.findUnique({
-      where: { tokenHash: this.hashToken(token) },
+      where: { id: challengeId },
     });
-    if (!record || record.consumedAt || record.expiresAt <= new Date()) {
+    if (!record || record.consumedAt || record.verifiedAt) this.invalidPasswordResetCode();
+    if (record.expiresAt <= new Date()) {
+      throw new ApiError('PASSWORD_RESET_CODE_EXPIRED', 'Password reset code has expired');
+    }
+    if (record.lockedAt || record.attemptCount >= PASSWORD_RESET_OTP_MAX_ATTEMPTS) {
+      throw new ApiError(
+        'PASSWORD_RESET_ATTEMPTS_EXCEEDED',
+        'Too many incorrect password reset attempts',
+      );
+    }
+    const expectedHash = this.hashVerificationCode(record.id, otp);
+    if (!this.safeHashEquals(record.tokenHash, expectedHash)) {
+      await this.prisma.passwordResetToken.updateMany({
+        where: {
+          id: record.id,
+          consumedAt: null,
+          verifiedAt: null,
+          lockedAt: null,
+          attemptCount: { lt: PASSWORD_RESET_OTP_MAX_ATTEMPTS },
+          expiresAt: { gt: new Date() },
+        },
+        data: { attemptCount: { increment: 1 } },
+      });
+      const failed = await this.prisma.passwordResetToken.findUniqueOrThrow({
+        where: { id: record.id },
+        select: { attemptCount: true, lockedAt: true },
+      });
+      if (failed.lockedAt || failed.attemptCount >= PASSWORD_RESET_OTP_MAX_ATTEMPTS) {
+        await this.prisma.passwordResetToken.updateMany({
+          where: { id: record.id, lockedAt: null },
+          data: { lockedAt: new Date() },
+        });
+        throw new ApiError(
+          'PASSWORD_RESET_ATTEMPTS_EXCEEDED',
+          'Too many incorrect password reset attempts',
+        );
+      }
+      this.invalidPasswordResetCode();
+    }
+    const resetToken = this.randomToken();
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + PASSWORD_RESET_GRANT_TTL_SECONDS * 1000);
+    const verified = await this.prisma.passwordResetToken.updateMany({
+      where: {
+        id: record.id,
+        consumedAt: null,
+        verifiedAt: null,
+        lockedAt: null,
+        attemptCount: { lt: PASSWORD_RESET_OTP_MAX_ATTEMPTS },
+        expiresAt: { gt: now },
+        tokenHash: expectedHash,
+      },
+      data: {
+        verifiedAt: now,
+        expiresAt,
+        tokenHash: this.hashToken(resetToken),
+      },
+    });
+    if (verified.count !== 1) this.invalidPasswordResetCode();
+    return {
+      status: 'verified',
+      resetToken,
+      expiresIn: PASSWORD_RESET_GRANT_TTL_SECONDS,
+    };
+  }
+
+  private async recordCurrentLegalConsents(
+    tx: TransactionClient,
+    userId: string,
+    ipAddress?: string,
+  ): Promise<void> {
+    const currentDocuments = await tx.legalDocument.findMany({
+      where: { status: CatalogStatus.ACTIVE, effectiveAt: { lte: new Date() } },
+      select: { id: true },
+    });
+    if (!currentDocuments.length) return;
+    await tx.userConsent.createMany({
+      data: currentDocuments.map((document) => ({
+        userId,
+        legalDocumentId: document.id,
+        ipAddress,
+      })),
+      skipDuplicates: true,
+    });
+  }
+
+  async resetPassword(
+    resetToken: string,
+    newPassword: string,
+  ): Promise<{ status: 'password_reset' }> {
+    const record = await this.prisma.passwordResetToken.findUnique({
+      where: { tokenHash: this.hashToken(resetToken) },
+    });
+    if (!record || !record.verifiedAt || record.consumedAt || record.expiresAt <= new Date()) {
       throw new ApiError('RESET_TOKEN_INVALID', 'Reset token is invalid or expired');
     }
     const passwordHash = await argon2.hash(newPassword, { type: argon2.argon2id });
     await this.prisma.transaction(async (tx) => {
+      const consumed = await tx.passwordResetToken.updateMany({
+        where: {
+          id: record.id,
+          tokenHash: this.hashToken(resetToken),
+          verifiedAt: { not: null },
+          consumedAt: null,
+          expiresAt: { gt: new Date() },
+        },
+        data: { consumedAt: new Date() },
+      });
+      if (consumed.count !== 1) {
+        throw new ApiError('RESET_TOKEN_INVALID', 'Reset token is invalid or expired');
+      }
       await tx.authIdentity.updateMany({
         where: { userId: record.userId, provider: AuthProvider.EMAIL },
         data: { passwordHash },
-      });
-      await tx.passwordResetToken.update({
-        where: { id: record.id },
-        data: { consumedAt: new Date() },
       });
       await tx.passwordResetToken.updateMany({
         where: { userId: record.userId, consumedAt: null, id: { not: record.id } },
@@ -390,6 +595,7 @@ export class AuthService {
     currentRoleId: string | null,
     audience: 'mobile' | 'admin',
     context: SessionContext,
+    db: TransactionClient = this.prisma,
   ): Promise<TokenPair> {
     return this.createSessionWithFamily(
       userId,
@@ -398,6 +604,7 @@ export class AuthService {
       audience,
       context,
       randomUUID(),
+      db,
     );
   }
 
@@ -459,6 +666,7 @@ export class AuthService {
     audience: 'mobile' | 'admin',
     context: SessionContext,
     familyId: string,
+    db: TransactionClient = this.prisma,
   ): Promise<TokenPair> {
     const sessionId = randomUUID();
     const pair = await this.buildTokens(
@@ -470,7 +678,7 @@ export class AuthService {
       audience,
     );
     const refreshHash = await argon2.hash(pair.refreshToken, { type: argon2.argon2id });
-    await this.prisma.authSession.create({
+    await db.authSession.create({
       data: this.sessionData(
         sessionId,
         userId,
@@ -585,30 +793,162 @@ export class AuthService {
     });
   }
 
-  private async storeVerificationToken(
-    tx: TransactionClient,
-    userId: string,
-    token: string,
-  ): Promise<void> {
+  private async activeVerificationChallenge(userId: string) {
+    return this.prisma.emailVerificationToken.findFirst({
+      where: {
+        userId,
+        consumedAt: null,
+        lockedAt: null,
+        attemptCount: { lt: EMAIL_OTP_MAX_ATTEMPTS },
+        expiresAt: { gt: new Date() },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  private async createVerificationChallenge(tx: TransactionClient, userId: string) {
+    const id = randomUUID();
+    const otp = randomInt(0, 1_000_000).toString().padStart(6, '0');
+    const expiresAt = new Date(Date.now() + EMAIL_OTP_TTL_SECONDS * 1000);
     await tx.emailVerificationToken.updateMany({
       where: { userId, consumedAt: null },
       data: { consumedAt: new Date() },
     });
-    await tx.emailVerificationToken.create({
+    const record = await tx.emailVerificationToken.create({
       data: {
+        id,
         userId,
-        tokenHash: this.hashToken(token),
-        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        tokenHash: this.hashVerificationCode(id, otp),
+        expiresAt,
       },
     });
+    return { record, otp };
   }
 
-  private async sendVerification(email: string, token: string): Promise<void> {
+  private async createPasswordResetChallenge(tx: TransactionClient, userId: string) {
+    const id = randomUUID();
+    const otp = randomInt(0, 1_000_000).toString().padStart(6, '0');
+    const expiresAt = new Date(Date.now() + PASSWORD_RESET_OTP_TTL_SECONDS * 1000);
+    await tx.passwordResetToken.updateMany({
+      where: { userId, consumedAt: null },
+      data: { consumedAt: new Date() },
+    });
+    const record = await tx.passwordResetToken.create({
+      data: {
+        id,
+        userId,
+        tokenHash: this.hashVerificationCode(id, otp),
+        expiresAt,
+      },
+    });
+    return { record, otp };
+  }
+
+  private async sendVerification(email: string, otp: string): Promise<void> {
     await this.email.send({
       to: email,
       subject: 'Verify your Photomatch account',
-      text: `Use this single-use token to verify your account: ${token}`,
+      text: `Your Photomatch verification code is: ${otp}. It expires in 10 minutes.`,
     });
+  }
+
+  private requiredChallenge(record: {
+    id: string;
+    expiresAt: Date;
+    createdAt: Date;
+  }): VerificationRequiredResponse {
+    return { status: 'verification_required', ...this.challengeMetadata(record) };
+  }
+
+  private acceptedChallenge(record: {
+    id: string;
+    expiresAt: Date;
+    createdAt: Date;
+  }): VerificationAcceptedResponse {
+    return { status: 'accepted', ...this.challengeMetadata(record) };
+  }
+
+  private challengeMetadata(record: {
+    id: string;
+    expiresAt: Date;
+    createdAt: Date;
+  }): VerificationChallengeResponse {
+    return {
+      challengeId: record.id,
+      expiresIn: Math.max(0, Math.ceil((record.expiresAt.getTime() - Date.now()) / 1000)),
+      resendAfter: Math.max(
+        0,
+        Math.ceil(
+          (record.createdAt.getTime() + EMAIL_OTP_RESEND_SECONDS * 1000 - Date.now()) / 1000,
+        ),
+      ),
+    };
+  }
+
+  private dummyRequiredChallenge(): VerificationRequiredResponse {
+    return {
+      status: 'verification_required',
+      challengeId: randomUUID(),
+      expiresIn: EMAIL_OTP_TTL_SECONDS,
+      resendAfter: EMAIL_OTP_RESEND_SECONDS,
+    };
+  }
+
+  private dummyAcceptedChallenge(): VerificationAcceptedResponse {
+    return {
+      status: 'accepted',
+      challengeId: randomUUID(),
+      expiresIn: EMAIL_OTP_TTL_SECONDS,
+      resendAfter: EMAIL_OTP_RESEND_SECONDS,
+    };
+  }
+
+  private passwordResetChallenge(record: {
+    id: string;
+    expiresAt: Date;
+    createdAt: Date;
+  }): VerificationAcceptedResponse {
+    return {
+      status: 'accepted',
+      challengeId: record.id,
+      expiresIn: Math.max(0, Math.ceil((record.expiresAt.getTime() - Date.now()) / 1000)),
+      resendAfter: Math.max(
+        0,
+        Math.ceil(
+          (record.createdAt.getTime() + PASSWORD_RESET_OTP_RESEND_SECONDS * 1000 - Date.now()) /
+            1000,
+        ),
+      ),
+    };
+  }
+
+  private dummyPasswordResetChallenge(): VerificationAcceptedResponse {
+    return {
+      status: 'accepted',
+      challengeId: randomUUID(),
+      expiresIn: PASSWORD_RESET_OTP_TTL_SECONDS,
+      resendAfter: PASSWORD_RESET_OTP_RESEND_SECONDS,
+    };
+  }
+
+  private hashVerificationCode(challengeId: string, otp: string): string {
+    return this.hashToken(`${challengeId}:${otp}`);
+  }
+
+  private safeHashEquals(actual: string, expected: string): boolean {
+    const actualBuffer = Buffer.from(actual, 'hex');
+    const expectedBuffer = Buffer.from(expected, 'hex');
+    return (
+      actualBuffer.length === expectedBuffer.length && timingSafeEqual(actualBuffer, expectedBuffer)
+    );
+  }
+
+  private invalidVerificationCode(): never {
+    throw new ApiError('VERIFICATION_CODE_INVALID', 'Verification code is invalid');
+  }
+
+  private invalidPasswordResetCode(): never {
+    throw new ApiError('PASSWORD_RESET_CODE_INVALID', 'Password reset code is invalid');
   }
 
   private userSummary(
@@ -626,6 +966,24 @@ export class AuthService {
       currentRoleId: user.currentRoleId,
       roles,
       onboardingCompleted: Boolean(user.onboardingCompletedAt),
+    };
+  }
+
+  private authSessionResponse(
+    tokens: TokenPair,
+    user: {
+      id: string;
+      email: string | null;
+      currentRoleId: string | null;
+      onboardingCompletedAt: Date | null;
+    },
+    roles: RoleCode[],
+  ) {
+    return {
+      ...tokens,
+      expiresIn: tokens.accessTokenExpiresIn,
+      tokenType: 'Bearer' as const,
+      user: this.userSummary(user, roles),
     };
   }
 

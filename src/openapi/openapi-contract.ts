@@ -76,11 +76,38 @@ export const MVP_RESPONSE_SCHEMAS: Record<string, Schema> = {
   ),
   VerificationPendingResponse: object(
     {
-      userId: uuid(),
-      status: { type: 'string' },
-      emailVerificationRequired: { type: 'boolean' },
+      status: { type: 'string', enum: ['verification_required'] },
+      challengeId: uuid(),
+      expiresIn: { type: 'integer', minimum: 0 },
+      resendAfter: { type: 'integer', minimum: 0 },
     },
-    ['userId', 'status', 'emailVerificationRequired'],
+    ['status', 'challengeId', 'expiresIn', 'resendAfter'],
+  ),
+  VerificationAcceptedResponse: object(
+    {
+      status: { type: 'string', enum: ['accepted'] },
+      challengeId: uuid(),
+      expiresIn: { type: 'integer', minimum: 0 },
+      resendAfter: { type: 'integer', minimum: 0 },
+    },
+    ['status', 'challengeId', 'expiresIn', 'resendAfter'],
+  ),
+  PasswordResetChallengeResponse: object(
+    {
+      status: { type: 'string', enum: ['accepted'] },
+      challengeId: uuid(),
+      expiresIn: { type: 'integer', minimum: 0 },
+      resendAfter: { type: 'integer', minimum: 0 },
+    },
+    ['status', 'challengeId', 'expiresIn', 'resendAfter'],
+  ),
+  PasswordResetVerifiedResponse: object(
+    {
+      status: { type: 'string', enum: ['verified'] },
+      resetToken: { type: 'string', minLength: 32 },
+      expiresIn: { type: 'integer', minimum: 1 },
+    },
+    ['status', 'resetToken', 'expiresIn'],
   ),
   AuthSessionResponse: object(
     {
@@ -192,6 +219,71 @@ export const MVP_RESPONSE_SCHEMAS: Record<string, Schema> = {
     },
     ['status'],
   ),
+  PublicCatalogItemResponse: object(
+    {
+      id: uuid(),
+      code: { type: 'string' },
+      name: { type: 'string' },
+    },
+    ['id', 'code', 'name'],
+  ),
+  PublicServiceSelectionResponse: object(
+    {
+      id: uuid(),
+      code: { type: 'string' },
+      name: { type: 'string' },
+      serviceMode: { type: 'string', enum: ['OFFERED', 'WANTED'] },
+      minPrice: { type: 'number', nullable: true },
+      maxPrice: { type: 'number', nullable: true },
+      currency: { type: 'string', nullable: true },
+      priceUnit: { type: 'string', nullable: true },
+    },
+    ['id', 'code', 'name', 'serviceMode'],
+  ),
+  PublicPhotographerProfileResponse: object({
+    headline: nullableString(),
+    yearsExperience: { type: 'integer', nullable: true },
+    availabilityStatus: {
+      type: 'string',
+      enum: ['AVAILABLE', 'BUSY', 'UNAVAILABLE'],
+      nullable: true,
+    },
+  }),
+  PublicProfileResponse: object(
+    {
+      userRoleId: uuid(),
+      role: { type: 'string', enum: ['CUSTOMER', 'PHOTOGRAPHER'] },
+      displayName: nullableString(),
+      bio: nullableString(),
+      avatarAssetId: { ...uuid(), nullable: true },
+      city: {
+        ...object({ id: uuid(), name: { type: 'string' } }, ['id', 'name']),
+        nullable: true,
+      },
+      identityVerificationStatus: { type: 'string' },
+      photographerProfile: { ...ref('PublicPhotographerProfileResponse'), nullable: true },
+      activityFields: arrayOf('PublicCatalogItemResponse'),
+      services: arrayOf('PublicServiceSelectionResponse'),
+      rating: {
+        ...object({ average: { type: 'number' }, count: { type: 'integer', minimum: 0 } }, [
+          'average',
+          'count',
+        ]),
+        nullable: true,
+      },
+    },
+    [
+      'userRoleId',
+      'role',
+      'displayName',
+      'bio',
+      'avatarAssetId',
+      'city',
+      'identityVerificationStatus',
+      'activityFields',
+      'services',
+    ],
+  ),
   PortfolioItemResponse: object(
     {
       id: uuid(),
@@ -203,6 +295,14 @@ export const MVP_RESPONSE_SCHEMAS: Record<string, Schema> = {
       sortOrder: { type: 'integer' },
       createdAt: dateTime(),
       updatedAt: dateTime(),
+      service: {
+        ...object({ id: uuid(), name: { type: 'string' }, code: { type: 'string' } }, [
+          'id',
+          'name',
+          'code',
+        ]),
+        nullable: true,
+      },
     },
     ['id', 'userRoleId', 'assetId', 'sortOrder'],
   ),
@@ -373,6 +473,10 @@ export const MVP_RESPONSE_SCHEMAS: Record<string, Schema> = {
       moderationReason: nullableString(),
       moderatedAt: { ...dateTime(), nullable: true },
       createdAt: dateTime(),
+      customer: {
+        ...object({ displayName: nullableString(), avatarAssetId: { ...uuid(), nullable: true } }),
+        nullable: true,
+      },
     },
     ['id', 'bookingId', 'reviewerUserId', 'revieweeUserId', 'rating', 'status', 'createdAt'],
   ),
@@ -502,6 +606,10 @@ const DIRECT_RESPONSE: Record<string, string> = {
   HealthController_live: 'HealthLiveResponse',
   HealthController_ready: 'HealthReadyResponse',
   AuthController_signUp: 'VerificationPendingResponse',
+  AuthController_verifyEmail: 'AuthSessionResponse',
+  AuthController_resend: 'VerificationAcceptedResponse',
+  AuthController_forgotPassword: 'PasswordResetChallengeResponse',
+  AuthController_verifyPasswordResetOtp: 'PasswordResetVerifiedResponse',
   AuthController_signIn: 'AuthSessionResponse',
   AuthController_oauthSignIn: 'AuthSessionResponse',
   AuthController_refresh: 'AuthSessionResponse',
@@ -515,7 +623,7 @@ const DIRECT_RESPONSE: Record<string, string> = {
   ProfilesController_self: 'ProfileResponse',
   ProfilesController_onboardingProgress: 'OnboardingProgressResponse',
   ProfilesController_updateSelf: 'ProfileResponse',
-  ProfilesController_publicProfile: 'ProfileResponse',
+  ProfilesController_publicProfile: 'PublicProfileResponse',
   ProfilesController_attachAvatar: 'ProfileResponse',
   ProfilesController_consent: 'ConsentResponse',
   ProfilesController_photographerSelf: 'ProfileResponse',
@@ -609,8 +717,6 @@ const ADMIN_PAGE_OPERATIONS = new Set([
 const STATUS_OPERATIONS = new Set([
   'AuthController_verifyEmail',
   'AuthController_resend',
-  'AuthController_changePendingEmail',
-  'AuthController_forgotPassword',
   'AuthController_resetPassword',
   'AuthController_signOut',
   'AdminAuthController_signOut',

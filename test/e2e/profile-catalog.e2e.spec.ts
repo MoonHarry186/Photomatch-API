@@ -296,6 +296,26 @@ describe('profile, catalog, and onboarding (e2e)', () => {
         expect(JSON.stringify(body)).not.toContain('exactPoint');
       });
   });
+
+  it('removes service selections whose parent fields are no longer selected', async () => {
+    await expect(
+      prisma.userRoleService.count({
+        where: { userRoleId: PHOTOGRAPHER_ROLE_ID, serviceId },
+      }),
+    ).resolves.toBe(1);
+
+    await request(app.getHttpServer())
+      .put(`/api/v1/me/roles/${PHOTOGRAPHER_ROLE_ID}/activity-fields`)
+      .set('authorization', `Bearer ${token}`)
+      .send({ activityFieldIds: [] })
+      .expect(200);
+
+    await request(app.getHttpServer())
+      .get(`/api/v1/me/roles/${PHOTOGRAPHER_ROLE_ID}/services`)
+      .set('authorization', `Bearer ${token}`)
+      .expect(200)
+      .expect(({ body }) => expect(body).toEqual([]));
+  });
 });
 
 async function createAsset(

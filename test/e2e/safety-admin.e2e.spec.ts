@@ -283,6 +283,42 @@ describe('trust, safety, and admin operations (e2e)', () => {
     }
   });
 
+  it('allows Admin to set an operational account status directly', async () => {
+    await request(app.getHttpServer())
+      .post(`/api/v1/admin/users/${STRANGER_ID}/status`)
+      .set('authorization', `Bearer ${customerToken}`)
+      .set('idempotency-key', 'customer-cannot-change-status-e2e')
+      .send({ status: AccountStatus.BANNED, reason: 'Unauthorized attempt' })
+      .expect(403);
+
+    await request(app.getHttpServer())
+      .post(`/api/v1/admin/users/${ADMIN_ID}/status`)
+      .set('authorization', `Bearer ${adminToken}`)
+      .set('idempotency-key', 'admin-self-status-denied-e2e')
+      .send({ status: AccountStatus.SUSPENDED, reason: 'Self action must be denied' })
+      .expect(403)
+      .expect(({ body }) => expect(body.code).toBe('SELF_STATUS_ACTION_DENIED'));
+
+    await request(app.getHttpServer())
+      .post(`/api/v1/admin/users/${STRANGER_ID}/status`)
+      .set('authorization', `Bearer ${adminToken}`)
+      .set('idempotency-key', 'admin-direct-ban-e2e')
+      .send({ status: AccountStatus.BANNED, reason: 'Direct admin status test' })
+      .expect(201)
+      .expect(({ body }) => expect(body.accountStatus).toBe(AccountStatus.BANNED));
+    await expect(
+      prisma.authSession.findUniqueOrThrow({ where: { id: STRANGER_SESSION_ID } }),
+    ).resolves.toMatchObject({ revokedAt: expect.any(Date) });
+
+    await request(app.getHttpServer())
+      .post(`/api/v1/admin/users/${STRANGER_ID}/status`)
+      .set('authorization', `Bearer ${adminToken}`)
+      .set('idempotency-key', 'admin-direct-restore-e2e')
+      .send({ status: AccountStatus.ACTIVE, reason: 'Direct admin restore test' })
+      .expect(201)
+      .expect(({ body }) => expect(body.accountStatus).toBe(AccountStatus.ACTIVE));
+  });
+
   it('accepts only participant-owned report evidence and exposes it to admin review', async () => {
     const ownEvidenceId = await createEvidence(prisma, CUSTOMER_ID, 'own');
     const foreignEvidenceId = await createEvidence(prisma, STRANGER_ID, 'foreign');
@@ -599,13 +635,6 @@ describe('trust, safety, and admin operations (e2e)', () => {
       .get(`/api/v1/admin/activity-fields/${field.body.id}`)
       .set('authorization', `Bearer ${adminToken}`)
       .expect(200);
-    await request(app.getHttpServer())
-      .patch(`/api/v1/admin/activity-fields/${field.body.id}`)
-      .set('authorization', `Bearer ${adminToken}`)
-      .send({ name: 'Updated Safety Test Field', status: CatalogStatus.INACTIVE })
-      .expect(200)
-      .expect(({ body }) => expect(body.status).toBe(CatalogStatus.INACTIVE));
-
     const service = await request(app.getHttpServer())
       .post('/api/v1/admin/services')
       .set('authorization', `Bearer ${adminToken}`)
@@ -626,6 +655,12 @@ describe('trust, safety, and admin operations (e2e)', () => {
       .get(`/api/v1/admin/services/${service.body.id}`)
       .set('authorization', `Bearer ${adminToken}`)
       .expect(200);
+    await request(app.getHttpServer())
+      .patch(`/api/v1/admin/activity-fields/${field.body.id}`)
+      .set('authorization', `Bearer ${adminToken}`)
+      .send({ name: 'Updated Safety Test Field', status: CatalogStatus.INACTIVE })
+      .expect(200)
+      .expect(({ body }) => expect(body.status).toBe(CatalogStatus.INACTIVE));
     await request(app.getHttpServer())
       .patch(`/api/v1/admin/services/${service.body.id}`)
       .set('authorization', `Bearer ${adminToken}`)

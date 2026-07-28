@@ -1,6 +1,15 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { AuthProvider, RoleCode } from '@prisma/client';
-import { IsEmail, IsEnum, IsOptional, IsString, IsUUID, Length, MinLength } from 'class-validator';
+import {
+  IsEmail,
+  IsEnum,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Length,
+  Matches,
+  MinLength,
+} from 'class-validator';
 
 export class SignUpDto {
   @ApiProperty()
@@ -15,29 +24,25 @@ export class SignUpDto {
 
 export class VerifyEmailDto {
   @ApiProperty()
+  @IsUUID()
+  challengeId!: string;
+
+  @ApiProperty({ minLength: 6, maxLength: 6, pattern: '^\\d{6}$' })
   @IsString()
-  @Length(32, 512)
-  token!: string;
+  @Length(6, 6)
+  @Matches(/^\d{6}$/)
+  otp!: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  deviceId?: string;
 }
 
 export class EmailDto {
   @ApiProperty()
   @IsEmail()
   email!: string;
-}
-
-export class ChangePendingEmailDto {
-  @ApiProperty()
-  @IsEmail()
-  currentEmail!: string;
-
-  @ApiProperty()
-  @IsEmail()
-  newEmail!: string;
-
-  @ApiProperty()
-  @IsString()
-  password!: string;
 }
 
 export class SignInDto extends EmailDto {
@@ -57,11 +62,28 @@ export class RefreshDto {
   refreshToken!: string;
 }
 
-export class ResetPasswordDto extends VerifyEmailDto {
+export class ResetPasswordDto {
+  @ApiProperty()
+  @IsString()
+  @Length(32, 512)
+  resetToken!: string;
+
   @ApiProperty({ minLength: 12 })
   @IsString()
   @MinLength(12)
   newPassword!: string;
+}
+
+export class VerifyPasswordResetOtpDto {
+  @ApiProperty()
+  @IsUUID()
+  challengeId!: string;
+
+  @ApiProperty({ minLength: 6, maxLength: 6, pattern: '^\\d{6}$' })
+  @IsString()
+  @Length(6, 6)
+  @Matches(/^\d{6}$/)
+  otp!: string;
 }
 
 export class OAuthSignInDto {

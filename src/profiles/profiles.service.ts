@@ -237,6 +237,14 @@ export class ProfilesService {
         await tx.userRoleField.createMany({
           data: dto.activityFieldIds.map((activityFieldId) => ({ userRoleId, activityFieldId })),
         });
+        await tx.userRoleService.deleteMany({
+          where: {
+            userRoleId,
+            service: { activityFieldId: { notIn: dto.activityFieldIds } },
+          },
+        });
+      } else {
+        await tx.userRoleService.deleteMany({ where: { userRoleId } });
       }
     });
     await this.recalculateOnboarding(userId, userRoleId);

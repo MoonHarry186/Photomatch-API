@@ -204,31 +204,53 @@ export class AdminService {
     if (!dto.reason.trim()) throw new ApiError('REASON_REQUIRED', 'Reason is required');
     if (adminUserId === userId)
       throw ApiError.forbidden('SELF_STATUS_ACTION_DENIED', 'Admin cannot change own status');
-    if (dto.action !== 'SUSPEND' && dto.action !== 'RESTORE') {
-      throw new ApiError('INVALID_STATUS_ACTION', 'Action must be SUSPEND or RESTORE');
+    if (
+      dto.status !== AccountStatus.ACTIVE &&
+      dto.status !== AccountStatus.SUSPENDED &&
+      dto.status !== AccountStatus.BANNED
+    ) {
+      throw new ApiError('INVALID_ACCOUNT_STATUS', 'Status must be ACTIVE, SUSPENDED, or BANNED');
     }
     return this.prisma.transaction(async (tx) => {
-      const expectedStatus =
-        dto.action === 'SUSPEND' ? AccountStatus.ACTIVE : AccountStatus.SUSPENDED;
-      const accountStatus =
-        dto.action === 'SUSPEND' ? AccountStatus.SUSPENDED : AccountStatus.ACTIVE;
+      const current = await tx.user.findUnique({
+        where: { id: userId },
+        select: { accountStatus: true },
+      });
+      if (!current) throw ApiError.notFound('User');
+      if (current.accountStatus === AccountStatus.DELETED) {
+        throw ApiError.conflict(
+          'DELETED_ACCOUNT_STATUS_IMMUTABLE',
+          'Deleted account status cannot be changed directly',
+        );
+      }
+      if (current.accountStatus === dto.status) {
+        throw ApiError.conflict(
+          'ACCOUNT_STATUS_UNCHANGED',
+          'Account already has the requested status',
+          { currentStatus: current.accountStatus },
+        );
+      }
       const updated = await tx.user.updateMany({
-        where: { id: userId, accountStatus: expectedStatus },
-        data: { accountStatus },
+        where: { id: userId, accountStatus: current.accountStatus },
+        data: { accountStatus: dto.status },
       });
       if (updated.count !== 1) {
-        const current = await tx.user.findUnique({
+        const latest = await tx.user.findUnique({
           where: { id: userId },
           select: { accountStatus: true },
         });
-        if (!current) throw ApiError.notFound('User');
+        if (!latest) throw ApiError.notFound('User');
         throw ApiError.conflict(
           'ACCOUNT_STATUS_CHANGED',
           'Account status no longer permits this action',
-          { expectedStatus, currentStatus: current.accountStatus },
+          {
+            previousStatus: current.accountStatus,
+            currentStatus: latest.accountStatus,
+            requestedStatus: dto.status,
+          },
         );
       }
-      if (dto.action === 'SUSPEND') {
+      if (dto.status !== AccountStatus.ACTIVE) {
         await tx.authSession.updateMany({
           where: { userId, revokedAt: null },
           data: { revokedAt: new Date() },
@@ -241,8 +263,8 @@ export class AdminService {
           eventType: 'admin.user_status.changed',
           payload: {
             userId,
-            previousStatus: expectedStatus,
-            newStatus: accountStatus,
+            previousStatus: current.accountStatus,
+            newStatus: dto.status,
             reason: dto.reason,
             adminUserId,
           },
@@ -779,6 +801,18 @@ export class AdminService {
 
   async updateActivityField(id: string, dto: UpdateActivityFieldDto) {
     if (dto.allowedRoles) this.assertNoAdminRole(dto.allowedRoles);
+    if (dto.status === CatalogStatus.ARCHIVED) {
+      const activeServiceCount = await this.prisma.service.count({
+        where: { activityFieldId: id, status: { not: CatalogStatus.ARCHIVED } },
+      });
+      if (activeServiceCount > 0) {
+        throw ApiError.conflict(
+          'ACTIVITY_FIELD_HAS_SERVICES',
+          'Archive child services before archiving the activity field',
+          { activeServiceCount },
+        );
+      }
+    }
     return this.prisma.transaction(async (tx) => {
       await tx.activityField.update({
         where: { id },
@@ -830,7 +864,17 @@ export class AdminService {
     return this.cursorPage(items, query.limit);
   }
 
-  createService(dto: CreateServiceDto) {
+  async createService(dto: CreateServiceDto) {
+    const activityField = await this.prisma.activityField.findFirst({
+      where: { id: dto.activityFieldId, status: CatalogStatus.ACTIVE },
+      select: { id: true },
+    });
+    if (!activityField) {
+      throw new ApiError(
+        'INVALID_ACTIVITY_FIELD',
+        'Service must belong to an active activity field',
+      );
+    }
     return this.prisma.service.create({
       data: {
         activityFieldId: dto.activityFieldId,
@@ -849,10 +893,56 @@ export class AdminService {
     });
   }
 
-  updateService(id: string, dto: UpdateServiceDto) {
+  async updateService(id: string, dto: UpdateServiceDto) {
+    const current = await this.prisma.service.findUnique({
+      where: { id },
+      select: {
+        activityFieldId: true,
+        _count: {
+          select: {
+            userSelections: true,
+            portfolioItems: true,
+            filterSelections: true,
+            shootRequests: true,
+            bookings: true,
+          },
+        },
+      },
+    });
+    if (!current) throw ApiError.notFound('Service');
+
+    if (dto.activityFieldId && dto.activityFieldId !== current.activityFieldId) {
+      const activityField = await this.prisma.activityField.findFirst({
+        where: { id: dto.activityFieldId, status: CatalogStatus.ACTIVE },
+        select: { id: true },
+      });
+      if (!activityField) {
+        throw new ApiError(
+          'INVALID_ACTIVITY_FIELD',
+          'Service must belong to an active activity field',
+        );
+      }
+      const referenceCount = Object.values(current._count).reduce(
+        (total, count) => total + count,
+        0,
+      );
+      if (referenceCount > 0) {
+        throw ApiError.conflict(
+          'SERVICE_FIELD_LOCKED',
+          'A referenced service cannot be moved to another activity field',
+          { referenceCount },
+        );
+      }
+    }
+
     return this.prisma.service.update({
       where: { id },
-      data: { name: dto.name?.trim(), description: dto.description?.trim(), status: dto.status },
+      data: {
+        activityFieldId: dto.activityFieldId,
+        name: dto.name?.trim(),
+        description: dto.description?.trim(),
+        status: dto.status,
+      },
       include: { activityField: true },
     });
   }

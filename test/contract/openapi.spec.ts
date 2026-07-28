@@ -98,6 +98,7 @@ describe('OpenAPI contract', () => {
       '/api/v1/admin/payments',
       '/api/v1/admin/refunds',
       '/api/v1/admin/identity-verifications',
+      '/api/v1/auth/change-pending-email',
     ]) {
       expect(document.paths).not.toHaveProperty(path);
     }
@@ -117,6 +118,21 @@ describe('OpenAPI contract', () => {
   });
 
   it('uses domain response models for critical generated-client workflows', () => {
+    expect(successSchema(document.paths['/api/v1/auth/sign-up'].post)).toEqual({
+      $ref: '#/components/schemas/VerificationPendingResponse',
+    });
+    expect(successSchema(document.paths['/api/v1/auth/resend-verification'].post)).toEqual({
+      $ref: '#/components/schemas/VerificationAcceptedResponse',
+    });
+    expect(successSchema(document.paths['/api/v1/auth/verify-email'].post)).toEqual({
+      $ref: '#/components/schemas/AuthSessionResponse',
+    });
+    expect(successSchema(document.paths['/api/v1/auth/forgot-password'].post)).toEqual({
+      $ref: '#/components/schemas/PasswordResetChallengeResponse',
+    });
+    expect(successSchema(document.paths['/api/v1/auth/verify-password-reset-otp'].post)).toEqual({
+      $ref: '#/components/schemas/PasswordResetVerifiedResponse',
+    });
     expect(successSchema(document.paths['/api/v1/auth/sign-in'].post)).toEqual({
       $ref: '#/components/schemas/AuthSessionResponse',
     });
@@ -141,6 +157,18 @@ describe('OpenAPI contract', () => {
     });
     expect(successSchema(document.paths['/api/v1/admin/reports/{reportId}/status'].post)).toEqual({
       $ref: '#/components/schemas/ReportResolutionResponse',
+    });
+  });
+
+  it('allows Admin to set operational account statuses directly', () => {
+    expect(document.components?.schemas?.UserStatusActionDto).toMatchObject({
+      required: ['status', 'reason'],
+      properties: {
+        status: {
+          type: 'string',
+          enum: ['ACTIVE', 'SUSPENDED', 'BANNED'],
+        },
+      },
     });
   });
 

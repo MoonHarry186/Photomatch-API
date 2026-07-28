@@ -31,6 +31,7 @@ export class CatalogService {
     return this.prisma.service.findMany({
       where: {
         status: CatalogStatus.ACTIVE,
+        activityField: { status: CatalogStatus.ACTIVE },
         ...(activityFieldId ? { activityFieldId } : {}),
       },
       select: { id: true, code: true, name: true, description: true, activityFieldId: true },

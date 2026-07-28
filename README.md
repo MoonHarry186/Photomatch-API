@@ -91,13 +91,13 @@ create the local R2-compatible bucket and then exits successfully.
 
 Useful local URLs:
 
-| Service | URL |
-| --- | --- |
-| Swagger UI | http://localhost:53000/api/docs |
-| API base URL | http://localhost:53000/api/v1 |
+| Service          | URL                                       |
+| ---------------- | ----------------------------------------- |
+| Swagger UI       | http://localhost:53000/api/docs           |
+| API base URL     | http://localhost:53000/api/v1             |
 | API health check | http://localhost:53000/api/v1/health/live |
-| Mailpit inbox | http://localhost:8025 |
-| MinIO console | http://localhost:59001 |
+| Mailpit inbox    | http://localhost:8025                     |
+| MinIO console    | http://localhost:59001                    |
 
 The local stack uses PostgreSQL on `55432`, Redis on `56379`, MinIO's S3-compatible
 API on `59000`, MinIO's console on `59001`, the API on `53000`, and Mailpit on
@@ -157,3 +157,15 @@ Cloudflare R2 is the only production object store. Local/test environments use t
 ## Out-of-scope routes
 
 The MVP intentionally exposes no notification inbox, shoot request, referral, identity-verification provider workflow, or paid Photographer-initiated swipe route. Unsupported routes must remain absent from OpenAPI.
+
+## Verify an account in development
+
+Register in the mobile app, open Mailpit at `http://localhost:8025`, then copy the
+six-digit OTP into the verification screen. OTP challenges expire after 10
+minutes, allow five incorrect attempts and can be resent after 60 seconds. A
+successful verification creates the mobile session immediately.
+
+Password recovery uses a separate six-digit OTP challenge. The code expires
+after 10 minutes, allows five incorrect attempts and can be resent after 60
+seconds. A valid code issues a short-lived, single-use grant for setting the new
+password; completing the reset revokes existing sessions.

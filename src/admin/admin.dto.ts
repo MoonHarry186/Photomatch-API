@@ -280,9 +280,11 @@ export class AdminLegalDocumentQueryDto extends AdminSearchQueryDto {
 }
 
 export class UserStatusActionDto {
-  @ApiProperty({ enum: ['SUSPEND', 'RESTORE'] })
-  @IsString()
-  action!: 'SUSPEND' | 'RESTORE';
+  @ApiProperty({
+    enum: [AccountStatus.ACTIVE, AccountStatus.SUSPENDED, AccountStatus.BANNED],
+  })
+  @IsIn([AccountStatus.ACTIVE, AccountStatus.SUSPENDED, AccountStatus.BANNED])
+  status!: AccountStatus;
 
   @ApiProperty()
   @IsString()
@@ -374,6 +376,11 @@ export class CreateServiceDto {
 }
 
 export class UpdateServiceDto {
+  @ApiPropertyOptional({ format: 'uuid' })
+  @IsOptional()
+  @IsUUID()
+  activityFieldId?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
