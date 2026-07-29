@@ -49,13 +49,13 @@ export class ProductionOAuthVerifier implements OAuthVerifierPort {
   }
 
   private definition(provider: AuthProvider): {
-    issuer: string;
+    issuer: string | string[];
     audience: string[];
     jwks: ReturnType<typeof createRemoteJWKSet>;
   } {
     if (provider === AuthProvider.GOOGLE) {
       return {
-        issuer: 'https://accounts.google.com',
+        issuer: ['https://accounts.google.com', 'accounts.google.com'],
         audience: this.config.getOrThrow<string[]>('GOOGLE_CLIENT_IDS'),
         jwks: this.googleJwks,
       };

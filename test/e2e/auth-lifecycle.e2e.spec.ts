@@ -11,6 +11,7 @@ const EMAIL = 'auth-lifecycle@photomatch.test';
 const PENDING_EMAIL = 'auth-pending@photomatch.test';
 const RECOVERY_EMAIL = 'auth-verification-recovery@photomatch.test';
 const RESET_EMAIL = 'auth-password-reset@photomatch.test';
+const OAUTH_EMAIL = 'auth-oauth@photomatch.test';
 const PASSWORD = 'AuthLifecycle!123';
 const NEW_PASSWORD = 'AuthLifecycle!456';
 
@@ -60,6 +61,13 @@ describe('authentication lifecycle (e2e)', () => {
     expect(user.currentRoleId).toBe(user.roles[0].id);
     expect(user.roles.map((item) => item.role.code)).toEqual([RoleCode.CUSTOMER]);
     expect(user.authIdentities[0].passwordHash).toMatch(/^\$argon2id\$/);
+    const [activeLegalCount, consentCount] = await Promise.all([
+      prisma.legalDocument.count({
+        where: { status: 'ACTIVE', effectiveAt: { lte: new Date() } },
+      }),
+      prisma.userConsent.count({ where: { userId: user.id } }),
+    ]);
+    expect(consentCount).toBe(activeLegalCount);
     verificationOtp = otpFrom(email.drain());
 
     await request(app.getHttpServer())
@@ -152,6 +160,27 @@ describe('authentication lifecycle (e2e)', () => {
       .expect(({ body }) => expect(body.code).toBe('VERIFICATION_CODE_EXPIRED'));
   });
 
+  it('records active legal consents during OAuth sign-in', async () => {
+    await request(app.getHttpServer())
+      .post('/api/v1/auth/oauth')
+      .send({
+        provider: 'GOOGLE',
+        idToken: `fake:${OAUTH_EMAIL}:google-subject`,
+        deviceId: 'auth-oauth-e2e',
+      })
+      .expect(201);
+    const user = await prisma.user.findUniqueOrThrow({
+      where: { email: OAUTH_EMAIL },
+    });
+    const [activeLegalCount, consentCount] = await Promise.all([
+      prisma.legalDocument.count({
+        where: { status: 'ACTIVE', effectiveAt: { lte: new Date() } },
+      }),
+      prisma.userConsent.count({ where: { userId: user.id } }),
+    ]);
+    expect(consentCount).toBe(activeLegalCount);
+  });
+
   it('rolls back OTP consumption and activation when session creation fails', async () => {
     const signUp = await request(app.getHttpServer())
       .post('/api/v1/auth/sign-up')
@@ -193,12 +222,21 @@ describe('authentication lifecycle (e2e)', () => {
   });
 
   it('rotates refresh tokens and revokes the family on replay', async () => {
+    const user = await prisma.user.findUniqueOrThrow({ where: { email: EMAIL } });
+    await prisma.userConsent.deleteMany({ where: { userId: user.id } });
     const signedIn = await request(app.getHttpServer())
       .post('/api/v1/auth/sign-in')
       .send({ email: EMAIL, password: PASSWORD, deviceId: 'auth-e2e' })
       .expect(201);
     accessToken = signedIn.body.accessToken as string;
     refreshToken = signedIn.body.refreshToken as string;
+    const [activeLegalCount, consentCount] = await Promise.all([
+      prisma.legalDocument.count({
+        where: { status: 'ACTIVE', effectiveAt: { lte: new Date() } },
+      }),
+      prisma.userConsent.count({ where: { userId: user.id } }),
+    ]);
+    expect(consentCount).toBe(activeLegalCount);
 
     const rotated = await request(app.getHttpServer())
       .post('/api/v1/auth/refresh')
@@ -415,6 +453,10 @@ function otpFrom(messages: Array<{ text: string }>): string {
 
 async function cleanup(prisma: PrismaService): Promise<void> {
   await prisma.user.deleteMany({
-    where: { email: { in: [EMAIL, PENDING_EMAIL, RECOVERY_EMAIL, RESET_EMAIL] } },
+    where: {
+      email: {
+        in: [EMAIL, PENDING_EMAIL, RECOVERY_EMAIL, RESET_EMAIL, OAUTH_EMAIL],
+      },
+    },
   });
 }
