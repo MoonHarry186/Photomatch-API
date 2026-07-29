@@ -75,6 +75,13 @@ export class AdminUserQueryDto extends AdminSearchQueryDto {
   cityId?: string;
 }
 
+export class AdminRoleQueryDto extends AdminSearchQueryDto {
+  @ApiPropertyOptional({ enum: RoleStatus })
+  @IsOptional()
+  @IsEnum(RoleStatus)
+  status?: RoleStatus;
+}
+
 export class AdminPhotographerQueryDto extends AdminSearchQueryDto {
   @ApiPropertyOptional({ enum: RoleStatus })
   @IsOptional()
@@ -351,6 +358,25 @@ export class UpdateActivityFieldDto {
   @ArrayUnique()
   @IsEnum(RoleCode, { each: true })
   allowedRoles?: RoleCode[];
+}
+
+export class UpdateRoleDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(80)
+  name?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  description?: string;
+
+  @ApiPropertyOptional({ enum: RoleStatus })
+  @IsOptional()
+  @IsEnum(RoleStatus)
+  status?: RoleStatus;
 }
 
 export class CreateServiceDto {

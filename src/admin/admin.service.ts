@@ -8,6 +8,7 @@ import {
   ReportStatus,
   ReviewStatus,
   RoleCode,
+  RoleStatus,
   Prisma,
 } from '@prisma/client';
 import { ApiError } from '../common/api-error';
@@ -23,6 +24,7 @@ import {
   AdminPhotographerQueryDto,
   AdminReportQueryDto,
   AdminReviewQueryDto,
+  AdminRoleQueryDto,
   AdminServiceQueryDto,
   AdminUserQueryDto,
   CreateActivityFieldDto,
@@ -31,6 +33,7 @@ import {
   ModerateReviewDto,
   UpdateActivityFieldDto,
   UpdateLegalDocumentDto,
+  UpdateRoleDto,
   UpdateServiceDto,
   UserStatusActionDto,
 } from './admin.dto';
@@ -774,6 +777,91 @@ export class AdminService {
       take: query.limit + 1,
     });
     return this.cursorPage(items, query.limit);
+  }
+
+  async roles(query: AdminRoleQueryDto) {
+    const cursor = decodeCursor<{ createdAt: string; id: string }>(query.cursor);
+    const matchingCode = Object.values(RoleCode).find(
+      (code) => code === query.search?.trim().toUpperCase(),
+    );
+    const items = await this.prisma.role.findMany({
+      where: {
+        ...(query.status ? { status: query.status } : {}),
+        AND: [
+          ...(query.search
+            ? [
+                {
+                  OR: [
+                    ...(matchingCode ? [{ code: matchingCode }] : []),
+                    { name: { contains: query.search, mode: Prisma.QueryMode.insensitive } },
+                    {
+                      description: {
+                        contains: query.search,
+                        mode: Prisma.QueryMode.insensitive,
+                      },
+                    },
+                  ],
+                },
+              ]
+            : []),
+          ...(cursor
+            ? [
+                {
+                  OR: [
+                    { createdAt: { lt: new Date(cursor.createdAt) } },
+                    { createdAt: new Date(cursor.createdAt), id: { lt: cursor.id } },
+                  ],
+                },
+              ]
+            : []),
+        ],
+      },
+      include: {
+        _count: { select: { userRoles: true, allowedFields: true } },
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: query.limit + 1,
+    });
+    return this.cursorPage(items, query.limit);
+  }
+
+  role(id: string) {
+    return this.prisma.role.findUniqueOrThrow({
+      where: { id },
+      include: {
+        allowedFields: {
+          include: { activityField: true },
+          orderBy: { activityField: { name: 'asc' } },
+        },
+        _count: { select: { userRoles: true, allowedFields: true } },
+      },
+    });
+  }
+
+  async updateRole(id: string, dto: UpdateRoleDto) {
+    const role = await this.prisma.role.findUnique({
+      where: { id },
+      select: { code: true },
+    });
+    if (!role) throw ApiError.notFound('Role');
+    if (role.code === RoleCode.ADMIN && dto.status === RoleStatus.INACTIVE) {
+      throw ApiError.conflict(
+        'ADMIN_ROLE_CANNOT_BE_DISABLED',
+        'The administrator role must remain active',
+      );
+    }
+
+    return this.prisma.role.update({
+      where: { id },
+      data: {
+        name: dto.name?.trim(),
+        description: dto.description?.trim(),
+        status: dto.status,
+      },
+      include: {
+        _count: { select: { userRoles: true, allowedFields: true } },
+      },
+    });
   }
 
   async createActivityField(dto: CreateActivityFieldDto) {

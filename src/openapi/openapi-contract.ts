@@ -56,6 +56,25 @@ export const MVP_RESPONSE_SCHEMAS: Record<string, Schema> = {
     },
     ['id', 'code', 'name'],
   ),
+  AdminRoleResponse: object(
+    {
+      id: uuid(),
+      code: { type: 'string', enum: ['CUSTOMER', 'PHOTOGRAPHER', 'ADMIN'] },
+      name: { type: 'string' },
+      description: nullableString(),
+      status: { type: 'string', enum: ['ACTIVE', 'INACTIVE'] },
+      createdAt: dateTime(),
+      updatedAt: dateTime(),
+      _count: object(
+        {
+          userRoles: { type: 'integer', minimum: 0 },
+          allowedFields: { type: 'integer', minimum: 0 },
+        },
+        ['userRoles', 'allowedFields'],
+      ),
+    },
+    ['id', 'code', 'name', 'status', 'createdAt', 'updatedAt', '_count'],
+  ),
   UserSummary: object(
     {
       id: uuid(),
@@ -674,6 +693,8 @@ const DIRECT_RESPONSE: Record<string, string> = {
   AdminController_penaltyDetail: 'PenaltyResponse',
   AdminController_revokePenalty: 'PenaltyResponse',
   AdminController_bookingDetail: 'BookingResponse',
+  AdminController_role: 'AdminRoleResponse',
+  AdminController_updateRole: 'AdminRoleResponse',
   AdminController_createActivityField: 'CatalogItemResponse',
   AdminController_activityField: 'CatalogItemResponse',
   AdminController_updateActivityField: 'CatalogItemResponse',
@@ -709,6 +730,7 @@ const ADMIN_PAGE_OPERATIONS = new Set([
   'AdminController_reports',
   'AdminController_penalties',
   'AdminController_bookings',
+  'AdminController_roles',
   'AdminController_activityFields',
   'AdminController_services',
   'AdminController_legalDocuments',

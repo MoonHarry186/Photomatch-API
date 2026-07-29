@@ -19,6 +19,7 @@ import {
   AdminPhotographerQueryDto,
   AdminReportQueryDto,
   AdminReviewQueryDto,
+  AdminRoleQueryDto,
   AdminServiceQueryDto,
   AdminUserQueryDto,
   CreateActivityFieldDto,
@@ -28,6 +29,7 @@ import {
   ModerateReviewDto,
   UpdateActivityFieldDto,
   UpdateLegalDocumentDto,
+  UpdateRoleDto,
   UpdateServiceDto,
   UserStatusActionDto,
 } from './admin.dto';
@@ -165,6 +167,21 @@ export class AdminController {
   @Get('bookings/:bookingId')
   bookingDetail(@Param('bookingId', ParseUUIDPipe) bookingId: string) {
     return this.admin.bookingDetail(bookingId);
+  }
+
+  @Get('roles')
+  roles(@Query() query: AdminRoleQueryDto) {
+    return this.admin.roles(query);
+  }
+
+  @Get('roles/:id')
+  role(@Param('id', ParseUUIDPipe) id: string) {
+    return this.admin.role(id);
+  }
+
+  @Patch('roles/:id')
+  updateRole(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateRoleDto) {
+    return this.admin.updateRole(id, dto);
   }
 
   @Get('activity-fields')

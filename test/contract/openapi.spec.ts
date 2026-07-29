@@ -85,6 +85,7 @@ describe('OpenAPI contract', () => {
       '/api/v1/admin/reports/{reportId}/resolve',
       '/api/v1/admin/reports/{reportId}/status',
       '/api/v1/admin/feature-codes',
+      '/api/v1/admin/roles',
       '/api/v1/admin/legal-documents/{id}/status',
     ];
     for (const path of expected) expect(document.paths).toHaveProperty(path);
@@ -105,7 +106,7 @@ describe('OpenAPI contract', () => {
   });
 
   it('publishes a concrete success schema for every HTTP operation', () => {
-    expect(allOperations).toHaveLength(114);
+    expect(allOperations).toHaveLength(117);
     for (const operation of allOperations) {
       const success = Object.entries(operation.responses).find(([code]) => code.startsWith('2'));
       expect(success).toBeDefined();
@@ -157,6 +158,9 @@ describe('OpenAPI contract', () => {
     });
     expect(successSchema(document.paths['/api/v1/admin/reports/{reportId}/status'].post)).toEqual({
       $ref: '#/components/schemas/ReportResolutionResponse',
+    });
+    expect(successSchema(document.paths['/api/v1/admin/roles/{id}'].patch)).toEqual({
+      $ref: '#/components/schemas/AdminRoleResponse',
     });
   });
 
@@ -216,6 +220,7 @@ describe('OpenAPI contract', () => {
       '/api/v1/conversations/{conversationId}/messages',
       '/api/v1/bookings',
       '/api/v1/admin/users',
+      '/api/v1/admin/roles',
       '/api/v1/admin/activity-fields',
       '/api/v1/admin/services',
       '/api/v1/admin/legal-documents',
@@ -239,6 +244,7 @@ describe('OpenAPI contract', () => {
   it('documents domain-specific Web Admin filters', () => {
     const expected: Array<[string, string[]]> = [
       ['/api/v1/admin/users', ['search', 'status', 'role', 'verificationStatus', 'cityId']],
+      ['/api/v1/admin/roles', ['search', 'status']],
       [
         '/api/v1/admin/photographers',
         [
