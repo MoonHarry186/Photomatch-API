@@ -5,6 +5,69 @@ import { AuthService } from '../../src/auth/auth.service';
 import { PrismaService } from '../../src/database/prisma.service';
 import { EmailPort, OAuthVerifierPort } from '../../src/integrations/integration.ports';
 
+describe('email account discovery feedback', () => {
+  it('reports an existing email during sign-up', async () => {
+    const prisma = {
+      user: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: '11111111-1111-4111-8111-111111111111',
+          accountStatus: 'ACTIVE',
+          emailVerified: true,
+        }),
+      },
+    } as unknown as PrismaService;
+    const service = new AuthService(
+      prisma,
+      {} as JwtService,
+      {} as ConfigService,
+      {} as EmailPort,
+      {} as OAuthVerifierPort,
+    );
+
+    let caught: unknown;
+    try {
+      await service.signUp({
+        email: 'existing@example.com',
+        password: 'StrongPassword1',
+      });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(ApiError);
+    expect((caught as ApiError).getStatus()).toBe(409);
+    expect((caught as ApiError).getResponse()).toMatchObject({
+      code: 'EMAIL_ALREADY_EXISTS',
+    });
+  });
+
+  it('reports an unknown email during password recovery', async () => {
+    const prisma = {
+      user: { findUnique: jest.fn().mockResolvedValue(null) },
+    } as unknown as PrismaService;
+    const service = new AuthService(
+      prisma,
+      {} as JwtService,
+      {} as ConfigService,
+      {} as EmailPort,
+      {} as OAuthVerifierPort,
+    );
+
+    let caught: unknown;
+    try {
+      await service.forgotPassword('missing@example.com');
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(ApiError);
+    expect((caught as ApiError).getStatus()).toBe(404);
+    expect((caught as ApiError).getResponse()).toMatchObject({
+      code: 'EMAIL_NOT_FOUND',
+    });
+  });
+});
+
 describe('email verification OTP', () => {
   it('locks a challenge on the fifth incorrect attempt', async () => {
     const challenge = {

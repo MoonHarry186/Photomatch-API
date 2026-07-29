@@ -73,22 +73,10 @@ export class AuthService {
     const email = dto.email.trim().toLowerCase();
     const existing = await this.prisma.user.findUnique({
       where: { email },
-      select: { id: true, accountStatus: true, emailVerified: true },
+      select: { id: true },
     });
     if (existing) {
-      if (
-        !existing.emailVerified &&
-        existing.accountStatus === AccountStatus.PENDING_VERIFICATION
-      ) {
-        const active = await this.activeVerificationChallenge(existing.id);
-        if (active) return this.requiredChallenge(active);
-        const issued = await this.prisma.transaction((tx) =>
-          this.createVerificationChallenge(tx, existing.id),
-        );
-        await this.sendVerification(email, issued.otp);
-        return this.requiredChallenge(issued.record);
-      }
-      return this.dummyRequiredChallenge();
+      throw ApiError.conflict('EMAIL_ALREADY_EXISTS', 'An account already exists with this email');
     }
     const passwordHash = await argon2.hash(dto.password, { type: argon2.argon2id });
     const issued = await this.prisma.transaction(async (tx) => {
@@ -417,7 +405,11 @@ export class AuthService {
       },
     });
     if (!user || !user.emailVerified || !user.authIdentities.length) {
-      return this.dummyPasswordResetChallenge();
+      throw new ApiError(
+        'EMAIL_NOT_FOUND',
+        'No password account exists with this email',
+        HttpStatus.NOT_FOUND,
+      );
     }
     const latest = await this.prisma.passwordResetToken.findFirst({
       where: {
@@ -793,19 +785,6 @@ export class AuthService {
     });
   }
 
-  private async activeVerificationChallenge(userId: string) {
-    return this.prisma.emailVerificationToken.findFirst({
-      where: {
-        userId,
-        consumedAt: null,
-        lockedAt: null,
-        attemptCount: { lt: EMAIL_OTP_MAX_ATTEMPTS },
-        expiresAt: { gt: new Date() },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
-  }
-
   private async createVerificationChallenge(tx: TransactionClient, userId: string) {
     const id = randomUUID();
     const otp = randomInt(0, 1_000_000).toString().padStart(6, '0');
@@ -885,15 +864,6 @@ export class AuthService {
     };
   }
 
-  private dummyRequiredChallenge(): VerificationRequiredResponse {
-    return {
-      status: 'verification_required',
-      challengeId: randomUUID(),
-      expiresIn: EMAIL_OTP_TTL_SECONDS,
-      resendAfter: EMAIL_OTP_RESEND_SECONDS,
-    };
-  }
-
   private dummyAcceptedChallenge(): VerificationAcceptedResponse {
     return {
       status: 'accepted',
@@ -919,15 +889,6 @@ export class AuthService {
             1000,
         ),
       ),
-    };
-  }
-
-  private dummyPasswordResetChallenge(): VerificationAcceptedResponse {
-    return {
-      status: 'accepted',
-      challengeId: randomUUID(),
-      expiresIn: PASSWORD_RESET_OTP_TTL_SECONDS,
-      resendAfter: PASSWORD_RESET_OTP_RESEND_SECONDS,
     };
   }
 

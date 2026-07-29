@@ -77,6 +77,15 @@ describe('authentication lifecycle (e2e)', () => {
       .expect(({ body }) => expect(body.code).toBe('EMAIL_VERIFICATION_REQUIRED'));
   });
 
+  it('reports an existing email without opening another verification flow', async () => {
+    await request(app.getHttpServer())
+      .post('/api/v1/auth/sign-up')
+      .send({ email: EMAIL, password: PASSWORD })
+      .expect(409)
+      .expect(({ body }) => expect(body.code).toBe('EMAIL_ALREADY_EXISTS'));
+    expect(email.drain()).toHaveLength(0);
+  });
+
   it('enforces resend cooldown, invalidates the old token, and verifies once', async () => {
     const cooldown = await request(app.getHttpServer())
       .post('/api/v1/auth/resend-verification')
@@ -379,16 +388,11 @@ describe('authentication lifecycle (e2e)', () => {
       .expect(401)
       .expect(({ body }) => expect(body.code).toBe('SESSION_REVOKED'));
 
-    const unknown = await request(app.getHttpServer())
+    await request(app.getHttpServer())
       .post('/api/v1/auth/forgot-password')
       .send({ email: 'unknown-password-reset@photomatch.test' })
-      .expect(201);
-    expect(unknown.body).toEqual(
-      expect.objectContaining({
-        status: 'accepted',
-        challengeId: expect.any(String),
-      }),
-    );
+      .expect(404)
+      .expect(({ body }) => expect(body.code).toBe('EMAIL_NOT_FOUND'));
     expect(email.drain()).toHaveLength(0);
   });
 
