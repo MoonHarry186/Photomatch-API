@@ -175,7 +175,7 @@ describe('profile, catalog, and onboarding (e2e)', () => {
             role: RoleCode.PHOTOGRAPHER,
             complete: false,
             discoveryEligible: false,
-            missing: expect.arrayContaining(['displayName', 'portfolioImages']),
+            missing: expect.arrayContaining(['displayName', 'avatar']),
             discoveryReasons: expect.any(Array),
           }),
         );
@@ -183,18 +183,15 @@ describe('profile, catalog, and onboarding (e2e)', () => {
     await expect(eligibility.onboarding(USER_ID, PHOTOGRAPHER_ROLE_ID)).resolves.toEqual(
       expect.objectContaining({
         complete: false,
-        missing: expect.arrayContaining([
-          'displayName',
-          'dateOfBirth',
-          'city',
-          'avatar',
-          'location',
-          'activityFields',
-          'services',
-          'portfolioImages',
-        ]),
+        missing: expect.arrayContaining(['displayName', 'dateOfBirth', 'city', 'avatar']),
       }),
     );
+    await request(app.getHttpServer())
+      .put('/api/v1/me/current-role')
+      .set('authorization', `Bearer ${token}`)
+      .send({ userRoleId: PHOTOGRAPHER_ROLE_ID })
+      .expect(409)
+      .expect(({ body }) => expect(body.code).toBe('ONBOARDING_REQUIREMENTS_INCOMPLETE'));
     await request(app.getHttpServer())
       .patch('/api/v1/me/profile')
       .set('authorization', `Bearer ${token}`)
@@ -242,6 +239,23 @@ describe('profile, catalog, and onboarding (e2e)', () => {
       .set('authorization', `Bearer ${token}`)
       .send({ assetId: avatar })
       .expect(200);
+    await request(app.getHttpServer())
+      .get('/api/v1/me/onboarding/progress')
+      .set('authorization', `Bearer ${token}`)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.complete).toBe(false);
+        expect(body.missing).toEqual(['providerChoice']);
+      });
+    await request(app.getHttpServer())
+      .put('/api/v1/me/current-role')
+      .set('authorization', `Bearer ${token}`)
+      .send({ userRoleId: PHOTOGRAPHER_ROLE_ID })
+      .expect(200);
+    await expect(prisma.user.findUniqueOrThrow({ where: { id: USER_ID } })).resolves.toEqual(
+      expect.objectContaining({ onboardingCompletedAt: expect.any(Date) }),
+    );
+
     const portfolioAssets = await Promise.all(
       Array.from({ length: 6 }, (_, index) =>
         createAsset(prisma, UploadPurpose.PORTFOLIO, index + 1),
@@ -253,13 +267,10 @@ describe('profile, catalog, and onboarding (e2e)', () => {
         .set('authorization', `Bearer ${token}`)
         .send({ assetId, serviceId, title: `Portfolio ${index + 1}` })
         .expect(201);
-      const progress = await eligibility.onboarding(USER_ID, PHOTOGRAPHER_ROLE_ID);
-      expect(progress.complete).toBe(index === 5);
-      if (index < 5) expect(progress.missing).toContain('portfolioImages');
+      const discovery = await eligibility.discovery(PHOTOGRAPHER_ROLE_ID);
+      if (index < 5) expect(discovery.reasons).toContain('portfolioImages');
+      else expect(discovery.reasons).not.toContain('portfolioImages');
     }
-    await expect(prisma.user.findUniqueOrThrow({ where: { id: USER_ID } })).resolves.toEqual(
-      expect.objectContaining({ onboardingCompletedAt: expect.any(Date) }),
-    );
     await request(app.getHttpServer())
       .get('/api/v1/me/onboarding/progress')
       .set('authorization', `Bearer ${token}`)

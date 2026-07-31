@@ -171,6 +171,7 @@ export class RelationshipsService {
               })
             : null;
         return {
+          interestId: interest.id,
           decision: existingDecision.direction,
           matchId: match?.id ?? null,
           conversationId: match?.conversation?.id ?? null,
@@ -194,9 +195,15 @@ export class RelationshipsService {
         },
       });
       if (dto.decision === SwipeDirection.REJECT)
-        return { decision: decision.direction, matchId: null };
+        return {
+          interestId: interest.id,
+          decision: decision.direction,
+          matchId: null,
+          conversationId: null,
+          created: true,
+        };
       const pair = await this.pairs.ensurePairInTransaction(tx, role.id, interest.actorUserRoleId);
-      return { decision: decision.direction, ...pair };
+      return { interestId: interest.id, decision: decision.direction, ...pair };
     });
   }
 
@@ -257,13 +264,12 @@ export class RelationshipsService {
   }
 
   async unmatch(userId: string, matchId: string, reason: string) {
-    return this.prisma.transaction(async (tx) => {
+    await this.prisma.transaction(async (tx) => {
       const match = await tx.match.findFirst({
         where: { id: matchId, OR: [{ userRoleA: { userId } }, { userRoleB: { userId } }] },
       });
       if (!match) throw ApiError.notFound('Match');
-      if (match.status !== MatchStatus.ACTIVE)
-        return { id: match.id, status: match.status, endedAt: match.endedAt };
+      if (match.status !== MatchStatus.ACTIVE) return;
       const endedAt = new Date();
       await tx.match.update({
         where: { id: match.id },
@@ -279,8 +285,8 @@ export class RelationshipsService {
         where: { matchId: match.id },
         data: { status: ConversationStatus.CLOSED },
       });
-      return { id: match.id, status: MatchStatus.ENDED, endedAt };
     });
+    return this.matchDetail(userId, matchId);
   }
 
   private currentRole(userId: string, currentRoleId?: string) {
@@ -314,6 +320,7 @@ export class RelationshipsService {
       status: match.status,
       matchedAt: match.matchedAt,
       endedAt: match.endedAt,
+      endReason: match.endReason,
       conversation: match.conversation,
       counterpart: {
         userRoleId: counterpart.id,

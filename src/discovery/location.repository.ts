@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, RoleCode } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import { decodeCursor, encodeCursor } from '../common/pagination';
 import { PrismaService } from '../database/prisma.service';
@@ -19,6 +19,10 @@ interface NearbyRow {
   availabilityStatus: string | null;
   identityVerificationStatus: string;
   distanceMeters: number;
+}
+
+interface DiscoveryRow extends Omit<NearbyRow, 'distanceMeters'> {
+  updatedAt: Date;
 }
 
 @Injectable()
@@ -94,16 +98,18 @@ export class LocationRepository {
     const radiusKm = Math.min(query.radiusKm ?? 20, maxRadiusKm);
     const cursor = decodeCursor<{ distanceMeters: number; userRoleId: string }>(query.cursor);
     const roleFilter = Prisma.sql`r.code = ${query.targetRole}::"RoleCode"`;
+    const serviceMode = query.targetRole === RoleCode.PHOTOGRAPHER ? 'OFFERED' : 'WANTED';
     const serviceFilter = query.serviceIds?.length
       ? Prisma.sql`AND EXISTS (
           SELECT 1 FROM user_role_services urs
           WHERE urs.user_role_id = ur.id AND urs.service_id IN (${Prisma.join(query.serviceIds.map((id) => Prisma.sql`${id}::uuid`))})
           AND urs.is_active = true
+          AND urs.service_mode = ${serviceMode}::"ServiceMode"
         )`
       : Prisma.empty;
     const priceFilter = Prisma.sql`
-      ${query.minPrice === undefined ? Prisma.empty : Prisma.sql`AND EXISTS (SELECT 1 FROM user_role_services pmin WHERE pmin.user_role_id = ur.id AND pmin.is_active = true AND pmin.max_price >= ${query.minPrice})`}
-      ${query.maxPrice === undefined ? Prisma.empty : Prisma.sql`AND EXISTS (SELECT 1 FROM user_role_services pmax WHERE pmax.user_role_id = ur.id AND pmax.is_active = true AND pmax.min_price <= ${query.maxPrice})`}
+      ${query.minPrice === undefined ? Prisma.empty : Prisma.sql`AND EXISTS (SELECT 1 FROM user_role_services pmin WHERE pmin.user_role_id = ur.id AND pmin.is_active = true AND pmin.service_mode = ${serviceMode}::"ServiceMode" AND pmin.max_price >= ${query.minPrice})`}
+      ${query.maxPrice === undefined ? Prisma.empty : Prisma.sql`AND EXISTS (SELECT 1 FROM user_role_services pmax WHERE pmax.user_role_id = ur.id AND pmax.is_active = true AND pmax.service_mode = ${serviceMode}::"ServiceMode" AND pmax.min_price <= ${query.maxPrice})`}
     `;
     const availabilityFilter = query.availableOnly
       ? Prisma.sql`AND pp.availability_status = 'AVAILABLE'::"PhotographerAvailabilityStatus"`
@@ -187,6 +193,157 @@ export class LocationRepository {
       nextCursor:
         hasMore && last
           ? encodeCursor({ distanceMeters: last.distanceMeters, userRoleId: last.userRoleId })
+          : null,
+    };
+  }
+
+  async discover(actorUserId: string, actorRoleId: string, query: DiscoveryQueryDto) {
+    const cursor = decodeCursor<{ updatedAt: string; userRoleId: string }>(query.cursor);
+    const roleFilter = Prisma.sql`r.code = ${query.targetRole}::"RoleCode"`;
+    const serviceMode = query.targetRole === RoleCode.PHOTOGRAPHER ? 'OFFERED' : 'WANTED';
+    const serviceFilter = query.serviceIds?.length
+      ? Prisma.sql`AND EXISTS (
+          SELECT 1
+          FROM user_role_services urs
+          JOIN services service_filter_catalog ON service_filter_catalog.id = urs.service_id
+          WHERE urs.user_role_id = ur.id
+            AND urs.service_id IN (${Prisma.join(query.serviceIds.map((id) => Prisma.sql`${id}::uuid`))})
+            AND urs.is_active = true
+            AND urs.service_mode = ${serviceMode}::"ServiceMode"
+            AND service_filter_catalog.status = 'ACTIVE'::"CatalogStatus"
+        )`
+      : Prisma.empty;
+    const priceFilter = Prisma.sql`
+      ${
+        query.minPrice === undefined
+          ? Prisma.empty
+          : Prisma.sql`AND EXISTS (
+              SELECT 1 FROM user_role_services pmin
+              WHERE pmin.user_role_id = ur.id
+                AND pmin.is_active = true
+                AND pmin.service_mode = ${serviceMode}::"ServiceMode"
+                AND pmin.max_price >= ${query.minPrice}
+            )`
+      }
+      ${
+        query.maxPrice === undefined
+          ? Prisma.empty
+          : Prisma.sql`AND EXISTS (
+              SELECT 1 FROM user_role_services pmax
+              WHERE pmax.user_role_id = ur.id
+                AND pmax.is_active = true
+                AND pmax.service_mode = ${serviceMode}::"ServiceMode"
+                AND pmax.min_price <= ${query.maxPrice}
+            )`
+      }
+    `;
+    const availabilityFilter = query.availableOnly
+      ? Prisma.sql`AND pp.availability_status = 'AVAILABLE'::"PhotographerAvailabilityStatus"`
+      : Prisma.empty;
+    const verificationFilter = query.verifiedOnly
+      ? Prisma.sql`AND u.identity_verification_status = 'VERIFIED'::"IdentityVerificationStatus"`
+      : Prisma.empty;
+    const photographerEligibilityFilter =
+      query.targetRole === RoleCode.PHOTOGRAPHER
+        ? Prisma.sql`
+            AND pp.user_role_id IS NOT NULL
+            AND EXISTS (
+              SELECT 1
+              FROM user_role_services eligible_service
+              JOIN services eligible_catalog ON eligible_catalog.id = eligible_service.service_id
+              WHERE eligible_service.user_role_id = ur.id
+                AND eligible_service.service_mode = 'OFFERED'::"ServiceMode"
+                AND eligible_service.is_active = true
+                AND eligible_service.min_price IS NOT NULL
+                AND eligible_service.max_price IS NOT NULL
+                AND eligible_service.currency = 'VND'
+                AND eligible_catalog.status = 'ACTIVE'::"CatalogStatus"
+            )
+            AND (
+              SELECT COUNT(*)
+              FROM portfolio_items eligible_portfolio
+              JOIN upload_assets eligible_asset ON eligible_asset.id = eligible_portfolio.asset_id
+              WHERE eligible_portfolio.user_role_id = ur.id
+                AND eligible_portfolio.deleted_at IS NULL
+                AND eligible_asset.status = 'USABLE'::"UploadAssetStatus"
+            ) >= 6
+          `
+        : Prisma.empty;
+    const cursorFilter = cursor
+      ? Prisma.sql`AND (
+          up.updated_at < ${new Date(cursor.updatedAt)}
+          OR (up.updated_at = ${new Date(cursor.updatedAt)} AND ur.id > ${cursor.userRoleId}::uuid)
+        )`
+      : Prisma.empty;
+    const rows = await this.prisma.$queryRaw<DiscoveryRow[]>(Prisma.sql`
+      SELECT
+        ur.id AS "userRoleId",
+        u.id AS "userId",
+        up.display_name AS "displayName",
+        up.avatar_asset_id AS "avatarAssetId",
+        pp.headline,
+        pp.availability_status::text AS "availabilityStatus",
+        u.identity_verification_status::text AS "identityVerificationStatus",
+        up.updated_at AS "updatedAt"
+      FROM user_roles ur
+      JOIN roles r ON r.id = ur.role_id
+      JOIN users u ON u.id = ur.user_id
+      JOIN user_profiles up ON up.user_id = u.id
+      JOIN user_settings settings ON settings.user_id = u.id
+      LEFT JOIN photographer_profiles pp ON pp.user_role_id = ur.id
+      WHERE ${roleFilter}
+        AND ur.id <> ${actorRoleId}::uuid
+        AND ur.status = 'ACTIVE'::"RoleStatus"
+        AND u.account_status = 'ACTIVE'::"AccountStatus"
+        AND up.status = 'ACTIVE'::"ProfileStatus"
+        AND settings.profile_visibility_enabled = true
+        AND NOT EXISTS (
+          SELECT 1 FROM account_penalties penalty
+          WHERE penalty.user_id = u.id
+            AND penalty.status = 'ACTIVE'::"PenaltyStatus"
+            AND penalty.starts_at <= NOW()
+            AND (penalty.ends_at IS NULL OR penalty.ends_at > NOW())
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM user_blocks ub
+          WHERE (ub.blocker_user_id = ${actorUserId}::uuid AND ub.blocked_user_id = u.id)
+             OR (ub.blocker_user_id = u.id AND ub.blocked_user_id = ${actorUserId}::uuid)
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM swipes s
+          WHERE s.actor_user_role_id = ${actorRoleId}::uuid
+            AND s.target_user_role_id = ur.id
+            AND s.direction IN ('LEFT'::"SwipeDirection", 'REJECT'::"SwipeDirection")
+            AND s.effective_until > NOW()
+        )
+        ${photographerEligibilityFilter}
+        ${serviceFilter}
+        ${priceFilter}
+        ${availabilityFilter}
+        ${verificationFilter}
+        ${cursorFilter}
+      ORDER BY up.updated_at DESC, ur.id ASC
+      LIMIT ${query.limit + 1}
+    `);
+    const hasMore = rows.length > query.limit;
+    const page = rows.slice(0, query.limit);
+    const last = page[page.length - 1];
+    return {
+      items: page.map((row) => ({
+        userRoleId: row.userRoleId,
+        displayName: row.displayName,
+        avatarAssetId: row.avatarAssetId,
+        headline: row.headline,
+        availabilityStatus: row.availabilityStatus,
+        identityVerificationStatus: row.identityVerificationStatus,
+        distance: null,
+      })),
+      nextCursor:
+        hasMore && last
+          ? encodeCursor({
+              updatedAt: last.updatedAt.toISOString(),
+              userRoleId: last.userRoleId,
+            })
           : null,
     };
   }

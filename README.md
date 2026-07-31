@@ -51,6 +51,17 @@ docker compose restart api worker
 The seed command is normally needed only during the first setup. Run migrations
 again whenever the project contains a new Prisma migration.
 
+To add eight idempotent Photographer fixtures that satisfy Discovery eligibility,
+including offered services with VND pricing, six usable portfolio items, profile
+visibility and local presence in Ho Chi Minh City or Ha Noi, run:
+
+```bash
+npm run seed:discovery-demo
+```
+
+The command is restricted to local PostgreSQL and MinIO hosts. Re-running it refreshes
+the same fixture records and presence window instead of creating duplicates.
+
 ### Daily startup
 
 After the first-time setup, start the existing containers with one command:

@@ -5,6 +5,7 @@ import {
   AccountStatus,
   MessageType,
   RoleCode,
+  ServiceMode,
   SwipeDirection,
   SwipeSource,
   UploadAssetStatus,
@@ -84,6 +85,7 @@ describe('interest, match, and chat journey (e2e)', () => {
       roleId: customerRole.id,
       email: 'interest-stranger@photomatch.test',
     });
+    await makePhotographerDiscoverable(prisma);
     const jwt = app.get(JwtService);
     customerToken = await accessToken(jwt, CUSTOMER_ID, CUSTOMER_SESSION_ID, CUSTOMER_ROLE_ID, [
       RoleCode.CUSTOMER,
@@ -106,6 +108,23 @@ describe('interest, match, and chat journey (e2e)', () => {
   });
 
   it('excludes LEFT cooldown candidates and restores them after expiry', async () => {
+    await globalCandidates(app, customerToken)
+      .expect(200)
+      .expect(({ body }) =>
+        expect(body.items).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              userRoleId: PHOTOGRAPHER_ROLE_ID,
+              distance: null,
+            }),
+          ]),
+        ),
+      );
+    await candidates(app, customerToken)
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.items).toHaveLength(0);
+      });
     await request(app.getHttpServer())
       .put('/api/v1/me/location')
       .set('authorization', `Bearer ${customerToken}`)
@@ -174,14 +193,34 @@ describe('interest, match, and chat journey (e2e)', () => {
       })
       .expect(201);
     interestId = interest.body.id as string;
-    await expect(prisma.match.count()).resolves.toBe(0);
+    await expect(
+      prisma.match.count({
+        where: {
+          OR: [
+            {
+              userRoleAId: { in: [CUSTOMER_ROLE_ID, PHOTOGRAPHER_ROLE_ID] },
+            },
+            {
+              userRoleBId: { in: [CUSTOMER_ROLE_ID, PHOTOGRAPHER_ROLE_ID] },
+            },
+          ],
+        },
+      }),
+    ).resolves.toBe(0);
 
     const incoming = await request(app.getHttpServer())
       .get('/api/v1/interests/incoming')
       .set('authorization', `Bearer ${photographerToken}`)
       .expect(200);
     expect(incoming.body.items).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: interestId })]),
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: interestId,
+          customer: expect.objectContaining({
+            userRoleId: CUSTOMER_ROLE_ID,
+          }),
+        }),
+      ]),
     );
 
     const decisions = await Promise.all(
@@ -194,11 +233,25 @@ describe('interest, match, and chat journey (e2e)', () => {
       ),
     );
     for (const response of decisions) expect(response.status).toBe(201);
+    for (const response of decisions) expect(response.body.interestId).toBe(interestId);
     expect(decisions[0].body.matchId).toBe(decisions[1].body.matchId);
     matchId = decisions[0].body.matchId as string;
     conversationId = decisions[0].body.conversationId as string;
-    await expect(prisma.match.count()).resolves.toBe(1);
-    await expect(prisma.conversation.count()).resolves.toBe(1);
+    await expect(
+      prisma.match.count({
+        where: {
+          OR: [
+            {
+              userRoleAId: { in: [CUSTOMER_ROLE_ID, PHOTOGRAPHER_ROLE_ID] },
+            },
+            {
+              userRoleBId: { in: [CUSTOMER_ROLE_ID, PHOTOGRAPHER_ROLE_ID] },
+            },
+          ],
+        },
+      }),
+    ).resolves.toBe(1);
+    await expect(prisma.conversation.count({ where: { matchId } })).resolves.toBe(1);
     await expect(
       prisma.swipe.count({
         where: {
@@ -280,7 +333,19 @@ describe('interest, match, and chat journey (e2e)', () => {
         .set('idempotency-key', 'interest-unmatch-e2e')
         .send({ reason: 'Journey complete' })
         .expect(201)
-        .expect(({ body }) => expect(body.status).toBe('ENDED'));
+        .expect(({ body }) =>
+          expect(body).toEqual(
+            expect.objectContaining({
+              id: matchId,
+              status: 'ENDED',
+              counterpart: expect.objectContaining({ userRoleId: PHOTOGRAPHER_ROLE_ID }),
+              conversation: expect.objectContaining({
+                id: conversationId,
+                status: 'CLOSED',
+              }),
+            }),
+          ),
+        );
     }
     await request(app.getHttpServer())
       .post(`/api/v1/conversations/${conversationId}/messages`)
@@ -309,11 +374,36 @@ describe('interest, match, and chat journey (e2e)', () => {
 
     const blockedPair = await pairs.ensurePair(STRANGER_ROLE_ID, PHOTOGRAPHER_ROLE_ID);
     await request(app.getHttpServer())
+      .put('/api/v1/me/location')
+      .set('authorization', `Bearer ${strangerToken}`)
+      .send({ latitude: 21.0279, longitude: 105.8343 })
+      .expect(200);
+    await request(app.getHttpServer())
+      .get('/api/v1/discovery/candidates')
+      .set('authorization', `Bearer ${strangerToken}`)
+      .query({ targetRole: RoleCode.PHOTOGRAPHER, radiusKm: 20 })
+      .expect(200)
+      .expect(({ body }) =>
+        expect(body.items).toEqual(
+          expect.arrayContaining([expect.objectContaining({ userRoleId: PHOTOGRAPHER_ROLE_ID })]),
+        ),
+      );
+    await request(app.getHttpServer())
       .post('/api/v1/blocks')
       .set('authorization', `Bearer ${strangerToken}`)
       .set('idempotency-key', 'interest-block-e2e')
       .send({ blockedUserId: PHOTOGRAPHER_ID, reason: 'Blocked chat e2e' })
       .expect(201);
+    await request(app.getHttpServer())
+      .get('/api/v1/discovery/candidates')
+      .set('authorization', `Bearer ${strangerToken}`)
+      .query({ targetRole: RoleCode.PHOTOGRAPHER, radiusKm: 20 })
+      .expect(200)
+      .expect(({ body }) =>
+        expect(body.items).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ userRoleId: PHOTOGRAPHER_ROLE_ID })]),
+        ),
+      );
     await request(app.getHttpServer())
       .post(`/api/v1/conversations/${blockedPair.conversationId}/messages`)
       .set('authorization', `Bearer ${strangerToken}`)
@@ -338,6 +428,46 @@ function candidates(app: INestApplication, token: string) {
     .get('/api/v1/discovery/candidates')
     .set('authorization', `Bearer ${token}`)
     .query({ targetRole: RoleCode.PHOTOGRAPHER, radiusKm: 20 });
+}
+
+function globalCandidates(app: INestApplication, token: string) {
+  return request(app.getHttpServer())
+    .get('/api/v1/discovery/candidates')
+    .set('authorization', `Bearer ${token}`)
+    .query({ targetRole: RoleCode.PHOTOGRAPHER });
+}
+
+async function makePhotographerDiscoverable(prisma: PrismaService): Promise<void> {
+  const service = await prisma.service.findFirstOrThrow({
+    where: { status: 'ACTIVE' },
+  });
+  await prisma.userRoleService.create({
+    data: {
+      userRoleId: PHOTOGRAPHER_ROLE_ID,
+      serviceId: service.id,
+      serviceMode: ServiceMode.OFFERED,
+      minPrice: 500_000,
+      maxPrice: 2_000_000,
+      currency: 'VND',
+      isActive: true,
+    },
+  });
+  for (let index = 0; index < 6; index += 1) {
+    const assetId = await createAsset(
+      prisma,
+      PHOTOGRAPHER_ID,
+      UploadPurpose.PORTFOLIO,
+      `portfolio-${index}`,
+    );
+    await prisma.portfolioItem.create({
+      data: {
+        userRoleId: PHOTOGRAPHER_ROLE_ID,
+        serviceId: service.id,
+        assetId,
+        sortOrder: index,
+      },
+    });
+  }
 }
 
 async function createUser(
@@ -395,12 +525,17 @@ function accessToken(
   );
 }
 
-async function createAsset(prisma: PrismaService, ownerUserId: string): Promise<string> {
-  const objectKey = `interest-e2e/${ownerUserId}/foreign.jpg`;
+async function createAsset(
+  prisma: PrismaService,
+  ownerUserId: string,
+  purpose: UploadPurpose = UploadPurpose.CHAT_IMAGE,
+  suffix = 'foreign',
+): Promise<string> {
+  const objectKey = `interest-e2e/${ownerUserId}/${suffix}.jpg`;
   const intent = await prisma.uploadIntent.create({
     data: {
       ownerUserId,
-      purpose: UploadPurpose.CHAT_IMAGE,
+      purpose,
       objectKey,
       mimeType: 'image/jpeg',
       extension: 'jpg',
@@ -411,7 +546,7 @@ async function createAsset(prisma: PrismaService, ownerUserId: string): Promise<
       asset: {
         create: {
           ownerUserId,
-          purpose: UploadPurpose.CHAT_IMAGE,
+          purpose,
           objectKey,
           mimeType: 'image/jpeg',
           sizeBytes: 1n,

@@ -356,7 +356,7 @@ export const MVP_RESPONSE_SCHEMAS: Record<string, Schema> = {
       headline: nullableString(),
       availabilityStatus: nullableString(),
       identityVerificationStatus: { type: 'string' },
-      distance: { type: 'string', example: '3-5 km' },
+      distance: { type: 'string', example: '3-5 km', nullable: true },
     },
     ['userRoleId', 'distance'],
   ),
@@ -375,13 +375,20 @@ export const MVP_RESPONSE_SCHEMAS: Record<string, Schema> = {
   InterestResponse: object(
     {
       id: uuid(),
-      actorUserRoleId: uuid(),
-      targetUserRoleId: uuid(),
-      direction: { type: 'string', enum: ['RIGHT', 'ACCEPT', 'REJECT'] },
-      resolvedAt: { ...dateTime(), nullable: true },
       createdAt: dateTime(),
+      source: { type: 'string', enum: ['DISCOVERY', 'NEARBY', 'PROFILE'] },
+      customer: object(
+        {
+          userRoleId: uuid(),
+          displayName: nullableString(),
+          avatarAssetId: { ...uuid(), nullable: true },
+          city: nullableString(),
+          identityVerificationStatus: { type: 'string' },
+        },
+        ['userRoleId'],
+      ),
     },
-    ['id', 'actorUserRoleId', 'targetUserRoleId', 'direction', 'createdAt'],
+    ['id', 'createdAt', 'source', 'customer'],
   ),
   PairDecisionResponse: object(
     {
@@ -389,8 +396,26 @@ export const MVP_RESPONSE_SCHEMAS: Record<string, Schema> = {
       decision: { type: 'string', enum: ['ACCEPT', 'REJECT'] },
       matchId: { ...uuid(), nullable: true },
       conversationId: { ...uuid(), nullable: true },
+      created: { type: 'boolean' },
     },
     ['interestId', 'decision'],
+  ),
+  MatchConversationResponse: object(
+    {
+      id: uuid(),
+      status: { type: 'string', enum: ['ACTIVE', 'CLOSED', 'BLOCKED'] },
+      lastMessageAt: { ...dateTime(), nullable: true },
+    },
+    ['id', 'status'],
+  ),
+  MatchCounterpartResponse: object(
+    {
+      userRoleId: uuid(),
+      role: { type: 'string', enum: ['CUSTOMER', 'PHOTOGRAPHER'] },
+      displayName: nullableString(),
+      avatarAssetId: { ...uuid(), nullable: true },
+    },
+    ['userRoleId', 'role'],
   ),
   MatchResponse: object(
     {
@@ -399,10 +424,13 @@ export const MVP_RESPONSE_SCHEMAS: Record<string, Schema> = {
       matchedAt: dateTime(),
       endedAt: { ...dateTime(), nullable: true },
       endReason: nullableString(),
-      conversationId: { ...uuid(), nullable: true },
-      counterpart: ref('ProfileResponse'),
+      conversation: {
+        ...ref('MatchConversationResponse'),
+        nullable: true,
+      },
+      counterpart: ref('MatchCounterpartResponse'),
     },
-    ['id', 'status', 'matchedAt'],
+    ['id', 'status', 'matchedAt', 'counterpart'],
   ),
   ConversationResponse: object(
     {

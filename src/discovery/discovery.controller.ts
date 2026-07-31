@@ -38,6 +38,9 @@ export class DiscoveryController {
 
   @Get('nearby')
   nearby(@CurrentUser() user: AuthenticatedUser, @Query() query: DiscoveryQueryDto) {
-    return this.discovery.candidates(user.userId, user.currentRoleId, query);
+    return this.discovery.candidates(user.userId, user.currentRoleId, {
+      ...query,
+      radiusKm: query.radiusKm ?? 20,
+    });
   }
 }

@@ -20,29 +20,19 @@ export class EligibilityService {
       include: {
         role: true,
         user: {
-          include: {
-            profile: true,
-            locations: { where: { isCurrent: true, deletedAt: null }, take: 1 },
-          },
+          include: { profile: true },
         },
-        selectedFields: true,
-        selectedServices: { where: { isActive: true } },
-        portfolioItems: { where: { deletedAt: null, asset: { status: UploadAssetStatus.USABLE } } },
       },
     });
     if (!role) return { complete: false, missing: ['role'] };
+    if (role.user.onboardingCompletedAt) return { complete: true, missing: [] };
     const missing: string[] = [];
     const profile = role.user.profile;
     if (!profile?.displayName) missing.push('displayName');
     if (!profile?.dateOfBirth) missing.push('dateOfBirth');
     if (!profile?.cityId) missing.push('city');
     if (!profile?.avatarAssetId) missing.push('avatar');
-    if (role.user.locations.length === 0) missing.push('location');
-    if (role.selectedFields.length === 0) missing.push('activityFields');
-    if (role.selectedServices.length === 0) missing.push('services');
-    if (role.role.code === RoleCode.PHOTOGRAPHER && role.portfolioItems.length < 6) {
-      missing.push('portfolioImages');
-    }
+    if (missing.length === 0) missing.push('providerChoice');
     return { complete: missing.length === 0, missing };
   }
 

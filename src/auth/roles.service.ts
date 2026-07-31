@@ -52,12 +52,48 @@ export class RolesService {
   async switch(userId: string, userRoleId: string) {
     const userRole = await this.prisma.userRole.findFirst({
       where: { id: userRoleId, userId, status: RoleStatus.ACTIVE },
-      include: { role: true },
+      include: {
+        role: true,
+        user: {
+          select: {
+            onboardingCompletedAt: true,
+            profile: {
+              select: {
+                displayName: true,
+                dateOfBirth: true,
+                cityId: true,
+                avatarAssetId: true,
+              },
+            },
+          },
+        },
+      },
     });
     if (!userRole || userRole.role.code === RoleCode.ADMIN) {
       throw ApiError.forbidden('ROLE_SWITCH_FORBIDDEN', 'Role is not available for mobile use');
     }
-    await this.prisma.user.update({ where: { id: userId }, data: { currentRoleId: userRoleId } });
+    if (!userRole.user.onboardingCompletedAt) {
+      const profile = userRole.user.profile;
+      const missing = [
+        !profile?.displayName && 'displayName',
+        !profile?.dateOfBirth && 'dateOfBirth',
+        !profile?.cityId && 'city',
+        !profile?.avatarAssetId && 'avatar',
+      ].filter((item): item is string => Boolean(item));
+      if (missing.length) {
+        throw ApiError.conflict(
+          'ONBOARDING_REQUIREMENTS_INCOMPLETE',
+          `Complete required onboarding fields before choosing a role: ${missing.join(', ')}`,
+        );
+      }
+    }
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: {
+        currentRoleId: userRoleId,
+        ...(!userRole.user.onboardingCompletedAt ? { onboardingCompletedAt: new Date() } : {}),
+      },
+    });
     return {
       currentRoleId: userRoleId,
       role: userRole.role.code,

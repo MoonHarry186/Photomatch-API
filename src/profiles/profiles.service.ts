@@ -78,7 +78,7 @@ export class ProfilesService {
     return profile;
   }
 
-  async updateSelf(userId: string, currentRoleId: string | undefined, dto: UpdateProfileDto) {
+  async updateSelf(userId: string, _currentRoleId: string | undefined, dto: UpdateProfileDto) {
     if (dto.cityId) {
       const city = await this.prisma.city.findFirst({
         where: { id: dto.cityId, status: CatalogStatus.ACTIVE },
@@ -98,7 +98,6 @@ export class ProfilesService {
         status: ProfileStatus.ACTIVE,
       },
     });
-    await this.recalculateOnboarding(userId, currentRoleId);
     return this.self(userId);
   }
 
@@ -174,7 +173,7 @@ export class ProfilesService {
     };
   }
 
-  async attachAvatar(userId: string, currentRoleId: string | undefined, assetId: string) {
+  async attachAvatar(userId: string, _currentRoleId: string | undefined, assetId: string) {
     await this.uploads.assertUsableOwnedAsset(userId, assetId, [UploadPurpose.AVATAR]);
     await this.prisma.transaction(async (tx) => {
       const profile = await tx.userProfile.findUniqueOrThrow({ where: { userId } });
@@ -187,11 +186,10 @@ export class ProfilesService {
         });
       }
     });
-    await this.recalculateOnboarding(userId, currentRoleId);
     return this.self(userId);
   }
 
-  async deleteAvatar(userId: string, currentRoleId: string | undefined) {
+  async deleteAvatar(userId: string, _currentRoleId: string | undefined) {
     await this.prisma.transaction(async (tx) => {
       const profile = await tx.userProfile.findUniqueOrThrow({ where: { userId } });
       await tx.userProfile.update({ where: { userId }, data: { avatarAssetId: null } });
@@ -202,7 +200,6 @@ export class ProfilesService {
         });
       }
     });
-    await this.recalculateOnboarding(userId, currentRoleId);
     return { status: 'deleted' };
   }
 
@@ -247,7 +244,6 @@ export class ProfilesService {
         await tx.userRoleService.deleteMany({ where: { userRoleId } });
       }
     });
-    await this.recalculateOnboarding(userId, userRoleId);
     return this.fields(userId, userRoleId);
   }
 
@@ -327,7 +323,6 @@ export class ProfilesService {
         });
       }
     });
-    await this.recalculateOnboarding(userId, userRoleId);
     return this.services(userId, userRoleId);
   }
 
@@ -404,7 +399,6 @@ export class ProfilesService {
       await tx.uploadAsset.update({ where: { id: dto.assetId }, data: { attachedAt: new Date() } });
       return item;
     });
-    await this.recalculateOnboarding(userId, userRoleId);
     return item;
   }
 
@@ -457,7 +451,6 @@ export class ProfilesService {
       await tx.portfolioItem.update({ where: { id: itemId }, data: { deletedAt: new Date() } });
       await tx.uploadAsset.update({ where: { id: item.assetId }, data: { attachedAt: null } });
     });
-    await this.recalculateOnboarding(userId, userRoleId);
     return { status: 'deleted' };
   }
 
@@ -546,14 +539,5 @@ export class ProfilesService {
       updatedAt: true,
       service: { select: { id: true, name: true, code: true } },
     };
-  }
-
-  private async recalculateOnboarding(userId: string, userRoleId?: string) {
-    if (!userRoleId) return;
-    const progress = await this.eligibility.onboarding(userId, userRoleId);
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { onboardingCompletedAt: progress.complete ? new Date() : null },
-    });
   }
 }

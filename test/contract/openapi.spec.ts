@@ -9,6 +9,7 @@ interface Schema {
   default?: unknown;
   minimum?: number;
   maximum?: number;
+  nullable?: boolean;
   properties?: Record<string, Schema>;
   required?: string[];
   items?: Schema;
@@ -147,6 +148,12 @@ describe('OpenAPI contract', () => {
     expect(successSchema(document.paths['/api/v1/discovery/candidates'].get)).toEqual({
       $ref: '#/components/schemas/DiscoveryCandidatePage',
     });
+    expect(
+      document.components?.schemas?.DiscoveryCandidateResponse?.properties?.distance,
+    ).toMatchObject({
+      type: 'string',
+      nullable: true,
+    });
     expect(successSchema(document.paths['/api/v1/bookings'].post)).toEqual({
       $ref: '#/components/schemas/BookingResponse',
     });
@@ -211,6 +218,17 @@ describe('OpenAPI contract', () => {
     expect(schemas.AdminDashboardResponse.required).toEqual(
       expect.arrayContaining(['activeUsers', 'activeMatches', 'pendingBookings']),
     );
+    expect(schemas.InterestResponse.required).toEqual(
+      expect.arrayContaining(['id', 'createdAt', 'source', 'customer']),
+    );
+    expect(schemas.InterestResponse.properties?.customer.properties).toHaveProperty('userRoleId');
+    expect(schemas.PairDecisionResponse.required).toEqual(
+      expect.arrayContaining(['interestId', 'decision']),
+    );
+    expect(schemas.MatchResponse.required).toEqual(
+      expect.arrayContaining(['id', 'status', 'matchedAt', 'counterpart']),
+    );
+    expect(schemas.MatchResponse.properties).toHaveProperty('conversation');
   });
 
   it('documents bounded cursor pagination in requests and responses', () => {

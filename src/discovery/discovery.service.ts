@@ -36,7 +36,6 @@ export class DiscoveryService {
         ),
       });
     }
-    await this.recalculateOnboarding(userId);
     return { status: 'updated' };
   }
 
@@ -51,7 +50,6 @@ export class DiscoveryService {
         data: { isVisible: false, visibleUntil: null },
       });
     });
-    await this.recalculateOnboarding(userId);
     return { status: 'deleted', discoveryPresenceEnabled: false };
   }
 
@@ -123,30 +121,19 @@ export class DiscoveryService {
     ) {
       throw new ApiError('INVALID_PRICE_RANGE', 'Minimum price must not exceed maximum price');
     }
-    return this.locations.nearby(
-      userId,
-      currentRoleId,
-      query,
-      this.config.getOrThrow<number>('LOCATION_MAX_RADIUS_KM'),
-    );
+    return query.radiusKm === undefined
+      ? this.locations.discover(userId, currentRoleId, query)
+      : this.locations.nearby(
+          userId,
+          currentRoleId,
+          query,
+          this.config.getOrThrow<number>('LOCATION_MAX_RADIUS_KM'),
+        );
   }
 
   private ownedRole(userId: string, userRoleId: string) {
     return this.prisma.userRole.findFirstOrThrow({
       where: { id: userRoleId, userId, status: RoleStatus.ACTIVE },
-    });
-  }
-
-  private async recalculateOnboarding(userId: string): Promise<void> {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { currentRoleId: true },
-    });
-    if (!user?.currentRoleId) return;
-    const progress = await this.eligibility.onboarding(userId, user.currentRoleId);
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: { onboardingCompletedAt: progress.complete ? new Date() : null },
     });
   }
 
