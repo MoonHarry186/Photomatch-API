@@ -99,7 +99,13 @@ export class RelationshipsService {
             user: {
               select: {
                 identityVerificationStatus: true,
-                profile: { select: { displayName: true, avatarAssetId: true, city: true } },
+                profile: {
+                  select: {
+                    displayName: true,
+                    avatarAssetId: true,
+                    city: { select: { name: true } },
+                  },
+                },
               },
             },
           },
@@ -120,7 +126,7 @@ export class RelationshipsService {
           userRoleId: item.actorRole.id,
           displayName: item.actorRole.user.profile?.displayName,
           avatarAssetId: item.actorRole.user.profile?.avatarAssetId,
-          city: item.actorRole.user.profile?.city,
+          city: item.actorRole.user.profile?.city?.name ?? null,
           identityVerificationStatus: item.actorRole.user.identityVerificationStatus,
         },
       })),

@@ -1,6 +1,7 @@
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import {
   AccountStatus,
+  AuthProvider,
   CatalogStatus,
   IdentityVerificationStatus,
   PhotographerAvailabilityStatus,
@@ -14,8 +15,10 @@ import {
   UploadIntentStatus,
   UploadPurpose,
 } from '@prisma/client';
+import * as argon2 from 'argon2';
 
 const DEMO_EMAIL_SUFFIX = '@discovery-demo.photomatch.test';
+export const DISCOVERY_DEMO_PASSWORD = process.env.DISCOVERY_DEMO_PASSWORD ?? 'PhotoMatchDemo123!';
 const PORTFOLIO_ITEMS_PER_PHOTOGRAPHER = 6;
 const PORTFOLIO_PLACEHOLDER = Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
@@ -143,11 +146,14 @@ async function main() {
   const prisma = new PrismaClient();
   try {
     const catalog = await loadCatalog(prisma);
+    const passwordHash = await argon2.hash(DISCOVERY_DEMO_PASSWORD, {
+      type: argon2.argon2id,
+    });
     await uploadPortfolioPlaceholders();
     await prisma.$transaction(
       async (tx) => {
         for (const [fixtureIndex, fixture] of discoveryDemoFixtures.entries()) {
-          await seedPhotographer(tx, catalog, fixtureIndex + 1, fixture);
+          await seedPhotographer(tx, catalog, fixtureIndex + 1, fixture, passwordHash);
         }
       },
       { timeout: 60_000 },
@@ -204,6 +210,7 @@ async function seedPhotographer(
   catalog: Catalog,
   sequence: number,
   fixture: DiscoveryFixture,
+  passwordHash: string,
 ) {
   const now = new Date();
   const userId = discoveryDemoId('user', sequence);
@@ -230,6 +237,16 @@ async function seedPhotographer(
       onboardingCompletedAt: now,
       deletedAt: null,
     },
+  });
+  await tx.authIdentity.upsert({
+    where: { provider_email: { provider: AuthProvider.EMAIL, email } },
+    create: {
+      userId,
+      provider: AuthProvider.EMAIL,
+      email,
+      passwordHash,
+    },
+    update: { userId, passwordHash },
   });
   await tx.userProfile.upsert({
     where: { userId },
